@@ -1,0 +1,296 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>MARGA – Find parking</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+  <link rel="stylesheet" href="/css/style.css">
+  <link rel="manifest" href="/manifest.json">
+  <meta name="theme-color" content="#1b1f2b">
+  <link rel="icon" href="/img/favicon.png">
+  <link rel="apple-touch-icon" href="/img/apple-touch-icon.png">
+</head>
+<body>
+<header id="nav"></header>
+<div class="search-page">
+  <aside class="side">
+    <h2>Find parking</h2>
+    <label>Destination</label>
+    <div class="row gap">
+      <div class="sg-wrap">
+        <input id="q" placeholder="Search a mall, station, area or address…" autocomplete="off">
+        <div id="sugg" class="sugg" hidden></div>
+      </div>
+      <button class="btn ghost sm" id="loc" title="Use my current location">📍</button>
+    </div>
+    <p class="note">Type a place and pick it from the suggestions, <b>click anywhere on the map</b>, or <b>drag the ★ pin</b>. Use 📍 for your current location.</p>
+    <div class="grid2">
+      <div><label>From</label><input type="datetime-local" id="from"></div>
+      <div><label>Until</label><input type="datetime-local" id="to"></div>
+    </div>
+    <div class="grid2">
+      <div><label>Vehicle</label><select id="veh"><option value="car">Car</option><option value="suv">SUV</option><option value="bike">Bike</option></select></div>
+      <div><label>Search radius</label><select id="rad"><option value="0.5">0.5 km</option><option value="1" selected>1 km</option><option value="2">2 km</option><option value="5">5 km</option></select></div>
+    </div>
+    <label>What matters most?</label>
+    <select id="pref"><option value="balanced">Balanced</option><option value="cheapest">Cheapest</option><option value="closest">Closest to destination</option></select>
+    <label>Slot features</label>
+    <div class="chips2"><label class="chip-cb"><input type="checkbox" class="sf" value="ev"> ⚡ EV charging</label><label class="chip-cb"><input type="checkbox" class="sf" value="covered"> ☂ Covered</label><label class="chip-cb"><input type="checkbox" class="sf" value="accessible"> ♿ Accessible</label></div>
+    <button class="btn block mt" id="go">Search</button>
+    <div id="out"></div>
+    <div id="osmOut"></div>
+  </aside>
+  <div id="map"></div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="/js/i18n.js"></script>
+<script src="/js/common.js"></script>
+<script>
+  renderNav();
+  const map = L.map('map').setView([28.6139, 77.2090], 13);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '© OpenStreetMap contributors · Place search by Photon' }).addTo(map);
+  const layer = L.layerGroup().addTo(map);   // facility markers + radius circle
+  const icon = (txt, cls) => L.divIcon({ className: '', html: `<div class="mk ${cls || ''}"><span>${txt}</span></div>`, iconSize: [32, 32], iconAnchor: [16, 32] });
+
+  const now = new Date();
+  $('from').value = toLocalInput(now);
+  $('to').value = toLocalInput(new Date(now.getTime() + 2 * 3600e3));
+
+  let dest = null, destMarker = null, pinToken = 0, areaOsm = null, osmToken = 0;
+
+  /* ---------------- place search / autocomplete (Photon, OpenStreetMap data) ---------------- */
+  const PHOTON = 'https://photon.komoot.io';
+
+  function fmtFeature(f) {
+    const p = f.properties || {}, [lng, lat] = f.geometry.coordinates;
+    const title = p.name || p.street || p.city || 'Unnamed place';
+    const sub = [...new Set([p.street && p.street !== title ? p.street : null, p.district, p.locality, p.city, p.state].filter(Boolean))].join(', ');
+    return { lat, lng, title, sub, label: sub ? `${title}, ${sub}` : title, osm: p.osm_value };
+  }
+
+  let sgTimer = null, sgCtl = null, sgItems = [], sgIdx = -1;
+
+  async function fetchSugg(q) {
+    if (sgCtl) sgCtl.abort();
+    sgCtl = new AbortController();
+    const c = map.getCenter();   // bias results towards the area you are looking at
+    const r = await fetch(`${PHOTON}/api/?q=${encodeURIComponent(q)}&limit=6&lang=en&lat=${c.lat}&lon=${c.lng}`, { signal: sgCtl.signal });
+    if (!r.ok) throw new Error('Place search unavailable');
+    const d = await r.json();
+    return (d.features || []).map(fmtFeature);
+  }
+
+  const hideSugg = () => { $('sugg').hidden = true; sgIdx = -1; };
+  function showSugg(items) {
+    sgIdx = -1;
+    $('sugg').innerHTML = items.length
+      ? items.map((it, i) => `<div data-i="${i}"><b>${esc(it.title)}</b><small>${esc(it.sub)}</small></div>`).join('')
+      : '<div class="none">No matching places. Try another name, or click the map.</div>';
+    $('sugg').hidden = false;
+  }
+  function highlight() {
+    [...$('sugg').querySelectorAll('[data-i]')].forEach((el, i) => el.classList.toggle('on', i === sgIdx));
+  }
+
+  $('q').addEventListener('input', () => {
+    clearTimeout(sgTimer);
+    const q = $('q').value.trim();
+    if (q.length < 3) { hideSugg(); return; }
+    sgTimer = setTimeout(async () => {
+      try { sgItems = await fetchSugg(q); showSugg(sgItems); }
+      catch (e) { if (e.name !== 'AbortError') hideSugg(); }
+    }, 350);   // wait for the user to pause typing
+  });
+  $('q').addEventListener('keydown', (e) => {
+    const open = !$('sugg').hidden && sgItems.length;
+    if (e.key === 'ArrowDown' && open) { e.preventDefault(); sgIdx = (sgIdx + 1) % sgItems.length; highlight(); }
+    else if (e.key === 'ArrowUp' && open) { e.preventDefault(); sgIdx = (sgIdx - 1 + sgItems.length) % sgItems.length; highlight(); }
+    else if (e.key === 'Enter') { e.preventDefault(); if (open && sgIdx >= 0) choose(sgItems[sgIdx]); else runSearch(); }
+    else if (e.key === 'Escape') hideSugg();
+  });
+  $('q').addEventListener('blur', () => setTimeout(hideSugg, 150));
+  $('sugg').addEventListener('mousedown', (e) => {
+    const d = e.target.closest('[data-i]');
+    if (d) { e.preventDefault(); choose(sgItems[+d.dataset.i]); }
+  });
+
+  function choose(it) {
+    hideSugg();
+    areaOsm = it.osm || null;
+    $('q').value = it.label;
+    placeDest(it.lat, it.lng, it.label);
+    map.setView([it.lat, it.lng], 16);
+    runSearch();
+  }
+
+  /* Fallback when the user presses Enter without choosing a suggestion */
+  async function geocodeFirst(q) {
+    try { const items = await fetchSugg(q); if (items.length) return items[0]; } catch (e) { /* fall through */ }
+    const r = await fetch('https://nominatim.openstreetmap.org/search?format=json&limit=1&q=' + encodeURIComponent(q));
+    const d = await r.json();
+    if (!d.length) throw new Error('Destination not found. Try a more specific name or click the map.');
+    return { lat: +d[0].lat, lng: +d[0].lon, label: d[0].display_name };
+  }
+
+  async function reverse(lat, lng) {
+    try {
+      const r = await fetch(`${PHOTON}/reverse?lon=${lng}&lat=${lat}&lang=en`);
+      const d = await r.json();
+      if (d.features && d.features[0]) return fmtFeature(d.features[0]).label;
+    } catch (e) { /* use coordinates below */ }
+    return `Pinned location (${lat.toFixed(4)}, ${lng.toFixed(4)})`;
+  }
+
+  /* ---------------- destination pin: click map / drag / current location ---------------- */
+  function placeDest(lat, lng, label) {
+    dest = { lat, lng, q: label };
+    if (!destMarker) {
+      destMarker = L.marker([lat, lng], { icon: icon('★', 'dest'), draggable: true, zIndexOffset: 1000 }).addTo(map);
+      destMarker.bindTooltip('Drag to adjust', { direction: 'top', offset: [0, -30] });
+      destMarker.on('dragend', () => { const ll = destMarker.getLatLng(); pinAt(ll.lat, ll.lng); });
+    } else destMarker.setLatLng([lat, lng]);
+  }
+
+  async function pinAt(lat, lng, prefix) {
+    const token = ++pinToken;
+    areaOsm = null;
+    placeDest(lat, lng, 'Locating…');
+    $('q').value = 'Locating…';
+    const lab = (prefix ? prefix + ' · ' : '') + await reverse(lat, lng);
+    if (token !== pinToken) return;      // a newer click/drag replaced this one
+    dest.q = lab; $('q').value = lab;
+    runSearch();
+  }
+
+  map.on('click', (e) => pinAt(e.latlng.lat, e.latlng.lng));
+
+  $('loc').onclick = () => {
+    if (!navigator.geolocation) return toast('Location is not supported by this browser', 'err');
+    toast('Getting your location…');
+    navigator.geolocation.getCurrentPosition(
+      (p) => { map.setView([p.coords.latitude, p.coords.longitude], 16); pinAt(p.coords.latitude, p.coords.longitude, 'Current location'); },
+      () => toast('Could not get your location. Allow location access in the browser, or search / click the map instead.', 'err'),
+      { enableHighAccuracy: true, timeout: 10000 });
+  };
+
+  /* ---------------- search + results ---------------- */
+  async function runSearch() {
+    const out = $('out'); hideSugg();
+    try {
+      const typed = $('q').value.trim();
+      if (!dest || dest.q !== typed) {
+        if (!typed) throw new Error('Enter a destination, or click the map');
+        out.innerHTML = '<p class="muted mt">Locating destination…</p>';
+        const it = await geocodeFirst(typed);
+        $('q').value = it.label;
+        placeDest(it.lat, it.lng, it.label);
+        map.setView([it.lat, it.lng], 15);
+      }
+      const start = new Date($('from').value).toISOString(), end = new Date($('to').value).toISOString();
+      if (new Date(end) <= new Date(start)) throw new Error('"Until" must be after "From"');
+      out.innerHTML = '<p class="muted mt">Searching…</p>'; $('osmOut').innerHTML = '';
+      const p = new URLSearchParams({ lat: dest.lat, lng: dest.lng, radius: $('rad').value, start, end, vehicle: $('veh').value, pref: $('pref').value });
+      const feats = [...document.querySelectorAll('.sf:checked')].map((c) => c.value).join(','); if (feats) p.set('features', feats);
+      const d = await api('/facilities/search?' + p);
+      draw(d, start, end);
+    } catch (e) { out.innerHTML = ''; toast(e.message, 'err'); }
+  }
+
+  function draw(d, start, end) {
+    layer.clearLayers();
+    L.circle([dest.lat, dest.lng], { radius: d.radius * 1000, color: '#b7ff3c', weight: 1, fillOpacity: 0.04, interactive: false }).addTo(layer);
+    const pts = [[dest.lat, dest.lng]];
+    if (!d.results.length) {
+      map.setView([dest.lat, dest.lng], 15);
+      $('out').innerHTML = '<div class="card mt"><h3>No verified parking in range</h3><p class="muted">Try a larger radius, move the pin, or search another place. No parking has been registered on MARGA near this place yet - other parking found on the map is listed below.</p></div>';
+      loadOsm(d, start, end);
+      return;
+    }
+    let html = `<p class="note mt">${d.results.length} facilit${d.results.length > 1 ? 'ies' : 'y'} within ${d.radius} km · ${esc(d.note)}</p>`;
+    let shownAlt = false;
+    d.results.forEach((f, i) => {
+      pts.push([f.lat, f.lng]);
+      L.marker([f.lat, f.lng], { icon: icon(i + 1, f.available ? '' : 'full') }).addTo(layer).bindPopup(`<b>${esc(f.name)}</b><br>${f.available} free`);
+      if (!f.available && !shownAlt) { shownAlt = true; html += '<h3 class="mt2">Fully booked for this time</h3>'; }
+      const link = `/facility.html?id=${f.id}&start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}&vehicle=${$('veh').value}`;
+      html += `<div class="card res ${i === 0 && f.available ? 'best' : ''}">
+        <div class="row between"><h3>${i + 1}. ${esc(f.name)}</h3>${i === 0 && f.available ? '<span class="badge b-ok">Best match</span>' : !f.available ? '<span class="badge b-err">Full</span>' : ''}</div>
+        <p class="muted">${esc(f.address)}</p>
+        <p>${rushBadge(f.rush)} ${priceBadge(f)}</p>${metaLine(f)}
+        <div class="row between mt"><span class="price">${inr(f.hourly_rate)}<small class="muted" style="font-size:.8rem">/hr</small></span><span>Est. ${inr(f.est_cost)} for your stay</span></div>
+        <ul>${f.reasons.map((r) => `<li>${esc(r)}</li>`).join('')}</ul>
+        <div class="row gap mt"><a class="btn sm" style="flex:1" href="${link}">${f.available ? 'View slots &amp; book' : 'View layout'}</a><a class="btn ghost sm" href="/rush.html?id=${f.id}">Rush forecast</a></div></div>`;
+    });
+    $('out').innerHTML = html;
+    loadOsm(d, start, end);
+    map.fitBounds(pts, { padding: [50, 50], maxZoom: 16 });
+  }
+
+  /* ---------------- expected rush + other parking nearby (OpenStreetMap) ---------------- */
+  const RUSH_CLASS = { Low: 'b-ok', Moderate: 'b-info', High: 'b-warn', 'Very high': 'b-err' };
+  const rushBadge = (r) => (r ? `<span class="badge ${RUSH_CLASS[r.label] || 'b-mute'}">Expected rush: ${esc(r.label)}</span>` : '');
+  const priceBadge = (f) => (f.pricing && f.pricing.enabled && f.pricing.multiplier !== 1 ? `<span class="badge ${f.pricing.multiplier > 1 ? 'b-warn' : 'b-ok'}">${esc(f.pricing.label)}</span>` : '');
+  const metaLine = (f) => `<p class="note" style="margin:6px 0">${f.rating_count ? `<span class="stars">${stars(f.rating_avg)}</span> ${f.rating_avg} (${f.rating_count}) · ` : ''}${f.ev_count ? `⚡ ${f.ev_count} EV · ` : ''}${f.covered_count ? `☂ ${f.covered_count} covered · ` : ''}${f.accessible_count ? `♿ ${f.accessible_count} · ` : ''}${f.height_limit_m ? `max height ${f.height_limit_m} m` : ''}</p>`;
+  const osmLayer = L.layerGroup().addTo(map);
+
+  function areaKind() {
+    const s = ((dest && dest.q) || '').toLowerCase();
+    if (/mall|market|shopping|plaza|bazaar|cinema|theatre|theater/.test(s) || ['mall', 'supermarket', 'department_store', 'marketplace'].includes(areaOsm)) return 'mall';
+    if (/office|tech park|business|hospital|station|metro|university|college|airport/.test(s)) return 'garage';
+    return 'other';
+  }
+  const distKm = (a, b, c, d) => {
+    const r = Math.PI / 180, x = Math.sin((c - a) * r / 2) ** 2 + Math.cos(a * r) * Math.cos(c * r) * Math.sin((d - b) * r / 2) ** 2;
+    return 12742 * Math.asin(Math.sqrt(x));
+  };
+  const PARK_TYPE = { 'multi-storey': 'Multi-storey', underground: 'Underground', surface: 'Surface lot', rooftop: 'Rooftop' };
+
+  async function loadOsm(d, start, end) {
+    const token = ++osmToken, box = $('osmOut');
+    osmLayer.clearLayers();
+    box.innerHTML = '<p class="note mt">Looking for other parking nearby on the map…</p>';
+    try {
+      const rM = Math.min(Math.max(d.radius * 1000, 800), 3000);
+      const q = `[out:json][timeout:20];(node["amenity"="parking"](around:${rM},${dest.lat},${dest.lng});way["amenity"="parking"](around:${rM},${dest.lat},${dest.lng}););out center tags 80;`;
+      const ctl = new AbortController(); const timer = setTimeout(() => ctl.abort(), 20000);
+      const r = await fetch('https://overpass-api.de/api/interpreter', { method: 'POST', body: 'data=' + encodeURIComponent(q),
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, signal: ctl.signal });
+      clearTimeout(timer);
+      if (!r.ok) throw new Error('map data unavailable');
+      const data = await r.json();
+      if (token !== osmToken) return;
+      const marga = d.results || [];
+      const lots = (data.elements || []).map((el) => ({ lat: el.lat ?? (el.center && el.center.lat), lng: el.lon ?? (el.center && el.center.lon), t: el.tags || {} }))
+        .filter((x) => x.lat != null && !['private', 'no'].includes(x.t.access) && !['garage_boxes', 'carports', 'street_side', 'lane'].includes(x.t.parking))
+        .filter((x) => !marga.some((m) => distKm(m.lat, m.lng, x.lat, x.lng) < 0.04))
+        .map((x) => ({ ...x, km: distKm(dest.lat, dest.lng, x.lat, x.lng) })).sort((a, b) => a.km - b.km).slice(0, 8);
+      if (!lots.length) { box.innerHTML = '<p class="note mt">No other parking found on the map near here.</p>'; return; }
+      const rush = await api(`/facilities/rush/estimate?kind=${areaKind()}&start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}`).catch(() => null);
+      if (token !== osmToken) return;
+      let html = `<h3 class="mt2">Other parking nearby</h3><p class="note">Found on OpenStreetMap. These lots are not verified and cannot be booked on MARGA yet, and there is no live availability. The rush level is a typical-pattern estimate for the area.</p>`;
+      lots.forEach((x) => {
+        L.circleMarker([x.lat, x.lng], { radius: 7, color: '#9aa3b8', fillColor: '#2f3650', fillOpacity: 0.95, weight: 2 }).addTo(osmLayer).bindPopup(esc(x.t.name || 'Parking lot'));
+        const bits = [PARK_TYPE[x.t.parking] || 'Parking lot', `${Math.round(x.km * 1000)} m from destination`];
+        if (x.t.fee === 'yes') bits.push('Paid'); if (x.t.fee === 'no') bits.push('Free');
+        if (x.t.capacity) bits.push(`${esc(x.t.capacity)} spaces`);
+        if (x.t.access === 'customers') bits.push('Customers only');
+        html += `<div class="card res"><div class="row between"><h3>${esc(x.t.name || 'Parking lot')}</h3><span class="badge b-mute">Not on MARGA yet</span></div>
+          <p class="muted">${bits.join(' · ')}</p>${rush ? `<p>${rushBadge(rush)}</p><ul><li>${esc(rush.reasons[0])}</li></ul>` : ''}
+          <a class="btn ghost block sm mt" target="_blank" href="https://www.google.com/maps/dir/?api=1&destination=${x.lat},${x.lng}">Directions</a></div>`;
+      });
+      box.innerHTML = html;
+    } catch (e) {
+      if (token === osmToken) box.innerHTML = '<p class="note mt">Could not load other nearby parking from the map right now.</p>';
+    }
+  }
+
+  $('go').onclick = runSearch;
+  ['from', 'to', 'veh', 'rad', 'pref'].forEach((id) => $(id).addEventListener('change', () => { if (dest) runSearch(); }));
+  document.querySelectorAll('.sf').forEach((c) => c.addEventListener('change', () => { c.closest('.chip-cb').classList.toggle('on', c.checked); if (dest) runSearch(); }));
+
+  const q0 = new URLSearchParams(location.search).get('q');
+  if (q0) { $('q').value = q0; runSearch(); }
+</script>
+</body>
+</html>

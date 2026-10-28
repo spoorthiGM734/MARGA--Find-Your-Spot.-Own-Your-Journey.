@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>MARGA – Choose your slot</title>
+  <link rel="stylesheet" href="/css/style.css">
+  <link rel="manifest" href="/manifest.json">
+  <meta name="theme-color" content="#1b1f2b">
+  <link rel="icon" href="/img/favicon.png">
+  <link rel="apple-touch-icon" href="/img/apple-touch-icon.png">
+</head>
+<body>
+<header id="nav"></header>
+<main class="wrap" style="padding-top:26px;padding-bottom:50px">
+  <a href="javascript:history.back()" class="muted">← Back to results</a>
+  <div class="row between wrap-sm mt">
+    <div><h1 id="fName">Loading…</h1><p class="muted" id="fAddr"></p><div id="fRating"></div></div>
+    <div id="fMeta" class="row gap wrap-sm"></div>
+  </div>
+
+  <div class="card mt">
+    <div class="grid4" style="align-items:end">
+      <div><label>From</label><input type="datetime-local" id="from"></div>
+      <div><label>Until</label><input type="datetime-local" id="to"></div>
+      <div><label>Vehicle type</label><select id="veh"><option value="car">Car</option><option value="suv">SUV</option><option value="bike">Bike</option></select></div>
+      <button class="btn" id="upd">Update availability</button>
+    </div>
+    <div class="grid2 mt">
+      <div><label>Your vehicle (brand and model)</label><input id="model" list="modelList" placeholder="e.g. Hyundai Creta" autocomplete="off"><datalist id="modelList"></datalist>
+        <p class="note" id="modelNote">Type your car or bike. We find its size automatically, so you never enter measurements.</p></div>
+      <div><label>Special needs</label>
+        <div class="chips2"><label class="chip-cb"><input type="checkbox" id="isEv"> ⚡ My vehicle is electric</label><label class="chip-cb"><input type="checkbox" id="permit"> ♿ I hold an accessible-parking permit</label></div></div>
+    </div>
+    <div class="row gap wrap-sm mt"><b class="note" style="margin:0">Show only slots with:</b>
+      <div class="chips2"><label class="chip-cb"><input type="checkbox" id="fEv"> ⚡ EV charging</label><label class="chip-cb"><input type="checkbox" id="fCov"> ☂ Covered</label><label class="chip-cb"><input type="checkbox" id="fAcc"> ♿ Accessible</label></div></div>
+  </div>
+
+  <div class="fac-grid mt">
+    <div>
+      <div class="layout-box" id="layout"></div>
+      <div class="legend">
+        <span><i style="background:rgba(183,255,60,.5)"></i>Available</span>
+        <span><i style="background:rgba(255,200,87,.6)"></i>Reserved</span>
+        <span><i style="background:rgba(255,107,107,.6)"></i>Occupied</span>
+        <span><i style="background:#555b73"></i>Not available for you</span>
+        <span><i style="background:#b7ff3c"></i>Your selection / your booked slot</span>
+        <span>⚡ EV charging</span><span>♿ Accessible</span>
+      </div>
+      <div class="card mt"><div class="row between wrap-sm"><h3>Expected rush</h3><span id="rushBadge"></span></div><div id="rushBody" class="muted mt">Loading…</div>
+        <a class="btn ghost sm mt" id="rushLink" href="#">See the rush calendar &amp; forecast</a></div>
+      <div class="card mt"><div class="row between wrap-sm"><h3>Ratings &amp; reviews</h3><span id="revSum"></span></div><div id="revBody" class="muted mt">Loading…</div></div>
+      <p class="note">This is a digital layout of virtual parking spaces. Spaces may not be physically marked on the ground – follow the operator’s on-site guidance.</p>
+    </div>
+
+    <aside class="card" id="panel">
+      <h3>Your booking</h3>
+      <p class="muted mt" id="hint">Tap an available slot on the layout.</p>
+      <div id="form" hidden>
+        <div class="kv"><span>Slot</span><b id="sLabel"></b><span>Size</span><b id="sSize"></b><span>Features</span><b id="sFeat"></b><span>Fit</span><b id="sFit"></b>
+          <span>Time</span><b id="sTime"></b><span>Rate</span><b id="sRate"></b><span>Estimated cost</span><b id="sEst" style="color:var(--lime)"></b><span>Booking fee</span><b id="sAdv"></b></div>
+        <label>Vehicle registration number</label>
+        <input id="reg" list="myVeh" placeholder="e.g. DL01AB1234" autocomplete="off">
+        <datalist id="myVeh"></datalist>
+        <label class="chip-cb mt" id="advRow" style="display:flex"><input type="checkbox" id="payAdv" checked> Pay the booking fee now (refundable as per the cancellation rules)</label>
+        <button class="btn block mt" id="book">Reserve this slot</button>
+        <details class="mt"><summary class="note" style="cursor:pointer">Cancellation &amp; refund rules</summary><ul id="rules" class="note" style="margin-left:18px"></ul></details>
+        <p class="note">The rest is paid when you leave, based on the time you actually parked. Reservations not checked in within 30 minutes of start are released.</p>
+      </div>
+    </aside>
+  </div>
+</main>
+
+<script src="/js/i18n.js"></script>
+<script src="/js/common.js"></script>
+<script>
+  renderNav();
+  const qs = new URLSearchParams(location.search), id = qs.get('id');
+  const DEF = { car: { w: 1.75, l: 4.1, h: 1.55 }, suv: { w: 1.85, l: 4.5, h: 1.70 }, bike: { w: 0.76, l: 1.98, h: 1.10 } };
+  let fac, slots = [], sel = null, myVeh = [], myBookings = [], cfg = null;
+  let vinfo = { ...DEF.car, ev: false, matched: false }, pricing = { enabled: false, multiplier: 1, label: 'Standard rate' };
+
+  const start0 = qs.get('start') ? new Date(qs.get('start')) : new Date();
+  $('from').value = toLocalInput(start0);
+  $('to').value = toLocalInput(qs.get('end') ? new Date(qs.get('end')) : new Date(start0.getTime() + 2 * 3600e3));
+  $('veh').value = qs.get('vehicle') || 'car';
+  vinfo = { ...DEF[$('veh').value], ev: false, matched: false };
+
+  const win = () => ({ start: new Date($('from').value).toISOString(), end: new Date($('to').value).toISOString() });
+  const featTags = (s) => [s.ev ? '<span class="tag lime">⚡ EV charging</span>' : '', s.covered ? '<span class="tag">☂ Covered</span>' : '<span class="tag">Open air</span>', s.accessible ? '<span class="tag">♿ Accessible</span>' : '', s.max_height ? `<span class="tag">Max height ${s.max_height} m</span>` : ''].join('');
+
+  /* ---------- the vehicle: size found from brand + model ---------- */
+  let detTimer, sugTimer;
+  async function detect() {
+    const text = $('model').value.trim(), type = $('veh').value;
+    try {
+      const r = await api(`/vehicles/resolve?text=${encodeURIComponent(text)}&type=${type}`);
+      vinfo = r; if (r.matched && r.type !== type) $('veh').value = r.type;
+      if (r.ev) $('isEv').checked = true;
+      $('modelNote').textContent = text ? r.note : 'Type your car or bike. We find its size automatically, so you never enter measurements.';
+    } catch (e) { /* keep the last values */ }
+    sel = null; showForm(); draw();
+  }
+  $('model').addEventListener('input', () => {
+    clearTimeout(detTimer); detTimer = setTimeout(detect, 400);
+    clearTimeout(sugTimer); sugTimer = setTimeout(async () => {
+      const q = $('model').value.trim(); if (q.length < 2) return;
+      try { const l = await api(`/vehicles/models?q=${encodeURIComponent(q)}&type=${$('veh').value}`); $('modelList').innerHTML = l.map((x) => `<option value="${esc(x)}">`).join(''); } catch (e) {}
+    }, 200);
+  });
+  function useSaved() {
+    const v = myVeh.find((x) => x.reg_no === $('reg').value.toUpperCase().replace(/\s+/g, '')); if (!v) return;
+    $('veh').value = v.type; $('model').value = [v.brand, v.model].filter(Boolean).join(' ');
+    vinfo = { w: v.width_m || DEF[v.type].w, l: v.length_m || DEF[v.type].l, h: v.height_m || DEF[v.type].h, ev: !!v.is_ev, matched: true };
+    $('isEv').checked = !!v.is_ev; $('modelNote').textContent = `Saved vehicle ${v.reg_no}: size is already known.`;
+    sel = null; showForm(); draw();
+  }
+  $('reg').addEventListener('change', useSaved);
+  $('veh').onchange = () => { if (!$('model').value.trim()) vinfo = { ...DEF[$('veh').value], ev: false, matched: false }; else detect(); sel = null; showForm(); draw(); };
+  ['isEv', 'permit', 'fEv', 'fCov', 'fAcc'].forEach((k) => $(k).addEventListener('change', (e) => { e.target.closest('.chip-cb').classList.toggle('on', e.target.checked); sel = null; showForm(); draw(); }));
+
+  /* ---------- rules for a slot (same as the server) ---------- */
+  function ruleFor(s) {
+    const v = $('veh').value;
+    if (v === 'bike' ? s.vehicle_type !== 'bike' : s.vehicle_type === 'bike') return { ok: false, why: `${s.label} is for ${s.vehicle_type} vehicles` };
+    const f = fitInfo(s, vinfo, v);
+    if (!f.ok) return { ok: false, why: `${s.label} (${sizeText(s)}) is too small for your vehicle - it needs at least ${f.needW.toFixed(2)} × ${f.needL.toFixed(2)} m` };
+    if (s.max_height && vinfo.h > s.max_height - 0.05) return { ok: false, why: `${s.label} has a height limit of ${s.max_height} m and your vehicle is about ${vinfo.h.toFixed(2)} m tall` };
+    if (s.ev && !$('isEv').checked && !vinfo.ev) return { ok: false, why: `${s.label} is an EV charging slot, reserved for electric vehicles` };
+    if (s.accessible && !$('permit').checked) return { ok: false, why: `${s.label} is an accessible slot - tick the accessible-parking permit box if you have one` };
+    if (($('fEv').checked && !s.ev) || ($('fCov').checked && !s.covered) || ($('fAcc').checked && !s.accessible)) return { ok: false, why: `${s.label} does not match the features you chose` };
+    return { ok: true, f };
+  }
+
+  async function loadFacility() {
+    fac = await api('/facilities/' + id);
+    $('fName').textContent = fac.name; $('fAddr').textContent = fac.address; document.title = fac.name + ' – MARGA';
+    $('fRating').innerHTML = fac.rating_count ? `<span class="stars">${stars(fac.rating_avg)}</span> <b>${fac.rating_avg}</b> <span class="muted">(${fac.rating_count} reviews)</span>` : '<span class="muted">No reviews yet</span>';
+    $('rushLink').href = '/rush.html?id=' + id;
+  }
+  function metaChips() {
+    const n = (k) => slots.filter((s) => s.is_active && s[k]).length;
+    $('fMeta').innerHTML = `<span class="badge b-ok">${inr(fac.hourly_rate)}/hr${fac.dynamic_pricing ? ' · smart pricing' : ''}</span><span class="badge b-mute">Open ${esc(fac.open_time)}–${esc(fac.close_time)}</span>` +
+      (fac.daily_cap ? `<span class="badge b-mute">Daily cap ${inr(fac.daily_cap)}</span>` : '') + (fac.grace_minutes ? `<span class="badge b-mute">${fac.grace_minutes} min grace</span>` : '') +
+      (n('ev') ? `<span class="badge b-info">⚡ ${n('ev')} EV</span>` : '') + (n('covered') ? `<span class="badge b-mute">☂ ${n('covered')} covered</span>` : '') + (n('accessible') ? `<span class="badge b-mute">♿ ${n('accessible')}</span>` : '') +
+      (fac.height_limit_m ? `<span class="badge b-mute">Max height ${fac.height_limit_m} m</span>` : '') +
+      `<a class="btn ghost sm" target="_blank" href="https://www.google.com/maps/dir/?api=1&destination=${fac.lat},${fac.lng}">Navigate</a>`;
+  }
+  async function loadMine() {
+    myBookings = []; if (!store.token) return;
+    try { myBookings = (await api('/bookings/mine')).filter((b) => b.facility_id === +id && ['confirmed', 'checked_in'].includes(b.status)); } catch (e) {}
+  }
+  async function loadSlots() {
+    const { start, end } = win();
+    if (new Date(end) <= new Date(start)) return toast('"Until" must be after "From"', 'err');
+    const d = await api(`/facilities/${id}/slots?start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}`);
+    slots = d.slots; metaChips();
+    if (sel && !slots.find((s) => s.id === sel.id && s.state === 'available')) { sel = null; showForm(); }
+    await loadMine(); draw(); loadRush();
+  }
+
+  function draw() {
+    const mine = {}; myBookings.forEach((b) => { mine[b.slot_id] = b.ref; });
+    const view = slots.map((s) => {
+      if (s.state !== 'available') return s;
+      const r = ruleFor(s); return r.ok ? s : { ...s, state: 'blocked', why: r.why };
+    });
+    renderLayout($('layout'), { ...fac, ...(fac.entry_side ? {} : {}) }, view, { selected: sel && sel.id, mine, onClick: (s) => {
+      if (mine[s.id]) return toast(`This is your slot. Parking ID ${mine[s.id]}`);
+      if (s.state !== 'available') return toast(s.why || (s.state === 'blocked' ? `${s.label} is not available` : `${s.label} is ${s.state} for this time`), 'err');
+      sel = s; showForm(); draw();
+    } });
+  }
+
+  function showForm() {
+    $('form').hidden = !sel; $('hint').hidden = !!sel;
+    if (!sel) return;
+    const { start, end } = win(), mins = Math.ceil((new Date(end) - new Date(start)) / 60000), m = pricing.multiplier || 1;
+    const est = Math.round(calcFee(mins, fac) * m), adv = est > 0 ? Math.min(est, Math.round(Math.max(fac.min_charge || 0, fac.hourly_rate * m))) : 0;
+    const r = ruleFor(sel), f = r.f || fitInfo(sel, vinfo, $('veh').value);
+    $('sLabel').textContent = sel.label;
+    $('sSize').textContent = `${Math.min(sel.w, sel.h).toFixed(1)} m wide × ${Math.max(sel.w, sel.h).toFixed(1)} m long (${(sel.w * sel.h).toFixed(1)} m²)`;
+    $('sFeat').innerHTML = featTags(sel);
+    $('sFit').innerHTML = f.tight ? `<span style="color:var(--warn)">Tight fit</span> - ${Math.max(0, f.spareW).toFixed(1)} m spare width` : `<span style="color:var(--lime)">Fits comfortably</span> - ${f.spareW.toFixed(1)} m spare width`;
+    $('sTime').textContent = `${fmt(start)} → ${fmt(end)}`;
+    $('sRate').innerHTML = `${inr(fac.hourly_rate * m)}/hr${pricing.enabled && m !== 1 ? ` <span class="badge ${m > 1 ? 'b-warn' : 'b-ok'}">${esc(pricing.label)}</span>` : ''}`;
+    $('sEst').textContent = inr(est);
+    $('sAdv').textContent = adv ? `${inr(adv)} now, the rest at exit` : 'Nothing to pay in advance';
+    $('advRow').style.display = adv ? 'flex' : 'none';
+  }
+  $('upd').onclick = () => { sel = null; showForm(); loadSlots().catch((e) => toast(e.message, 'err')); };
+
+  $('book').onclick = async () => {
+    if (!store.token) { location.href = '/auth.html?next=' + encodeURIComponent(location.pathname + location.search); return; }
+    const { start, end } = win(), reg = $('reg').value.trim();
+    const match = myVeh.find((v) => v.reg_no === reg.toUpperCase().replace(/\s+/g, ''));
+    $('book').disabled = true;
+    try {
+      const r = await api('/bookings', { method: 'POST', body: { slot_id: sel.id, start, end, reg_no: reg, vehicle_type: $('veh').value, vehicle_id: match && match.id,
+        vehicle_model: match ? '' : $('model').value.trim(), ev_vehicle: $('isEv').checked, accessible_permit: $('permit').checked } });
+      if (r.booking.advance_amount > 0 && $('payAdv').checked)
+        await new Promise((res) => payOnline(r.id, 'advance', res, res));   // continues when paid OR when the payment window is closed
+      const b = await api('/bookings/' + r.id);
+      const m = modal(`<h3 style="color:var(--lime)">Booking confirmed 🎉</h3>
+        <div style="text-align:center;margin:14px 0"><img src="${b.qr}" alt="QR" style="width:200px;border-radius:12px"><p class="note" style="margin-top:8px">Your Parking ID</p><h2 style="letter-spacing:.08em">${esc(b.ref)}</h2></div>
+        <div class="kv"><span>Facility</span><b>${esc(b.facility_name)}</b><span>Slot</span><b>${esc(b.slot_label)} · ${sizeText({ w: b.slot_w, h: b.slot_h })}</b><span>Features</span><b>${featTags({ ev: b.slot_ev, covered: b.slot_covered, accessible: b.slot_accessible, max_height: b.slot_max_height })}</b>
+        <span>Vehicle</span><b>${esc(b.reg_no)}</b><span>Time</span><b>${fmt(b.start_time)} → ${fmt(b.end_time)}</b>
+        <span>Booking fee</span><b>${b.advance_amount > 0 ? (b.advance_paid > 0 ? `${inr(b.advance_paid)} paid` : `${inr(b.advance_amount)} not paid yet - pay it from My bookings`) : 'none'}</b></div>
+        <p class="note">Show this QR at the gate: the operator scans it to check you in and out. When you leave, you pay online and the slot is freed.</p>
+        <a class="btn block" href="/drive.html?id=${b.id}">Open the drive guide to ${esc(b.slot_label)}</a><a class="btn ghost block mt" href="/dashboard.html">Go to my bookings</a>`);
+      m.addEventListener('mousedown', (e) => { if (e.target === m) location.href = '/dashboard.html'; });
+      sel = null; showForm(); loadSlots().catch(() => {});
+    } catch (e) { toast(e.message, 'err'); sel = null; showForm(); loadSlots().catch(() => {}); }
+    $('book').disabled = false;
+  };
+
+  /* ---------- rush ---------- */
+  const RUSH_CLASS = { Low: 'b-ok', Moderate: 'b-info', High: 'b-warn', 'Very high': 'b-err' };
+  const hrLabel = (h) => `${h % 12 || 12}${h < 12 ? 'a' : 'p'}`;
+  async function loadRush() {
+    try {
+      const { start, end } = win();
+      const r = await api(`/facilities/${id}/rush?start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}`);
+      pricing = r.pricing || pricing; showForm();
+      $('rushBadge').innerHTML = `<span class="badge ${RUSH_CLASS[r.label] || 'b-mute'}">${esc(r.label)} at your time</span>`;
+      const hrs = r.hourly.filter((h) => h.hour >= 6);
+      $('rushBody').innerHTML = `<div class="rush-chart">${hrs.map((h) => `<div class="rb l-${h.cls}${h.inWindow ? ' sel' : ''}" style="height:${Math.max(5, Math.round(h.score * 100))}%" title="${hrLabel(h.hour)}: ${esc(h.level)}"></div>`).join('')}</div>
+        <div class="rush-lab">${hrs.map((h) => `<span>${h.hour % 3 === 0 ? hrLabel(h.hour) : ''}</span>`).join('')}</div>
+        <ul style="margin:10px 0 0 18px">${r.reasons.map((x) => `<li>${esc(x)}</li>`).join('')}</ul>
+        ${r.pricing && r.pricing.enabled ? `<p class="mt"><span class="badge ${r.pricing.multiplier > 1 ? 'b-warn' : r.pricing.multiplier < 1 ? 'b-ok' : 'b-mute'}">${esc(r.pricing.label)}</span> <span class="muted">${inr(r.pricing.hourly_effective)}/hr for your time</span></p>` : ''}
+        ${r.quietest ? `<p class="mt" style="color:var(--white)">Quietest: <b>${r.quietest.from}–${r.quietest.to}</b> (${esc(r.quietest.level)}) · Busiest: <b>${r.busiest.from}–${r.busiest.to}</b> (${esc(r.busiest.level)})</p>` : ''}
+        <p class="note">${esc(r.confidence)}. White outline = your selected time.</p>`;
+    } catch (e) { $('rushBody').textContent = 'Rush estimate is not available right now.'; }
+  }
+  async function loadReviews() {
+    try {
+      const d = await api('/reviews/facility/' + id);
+      $('revSum').innerHTML = d.count ? `<span class="stars">${stars(d.average)}</span> <b>${d.average}</b> <span class="muted">(${d.count})</span>` : '';
+      const max = Math.max(1, ...d.distribution.map((x) => x.count));
+      $('revBody').innerHTML = d.count ? `<div style="margin-bottom:8px">${d.distribution.map((x) => `<div class="bar-row"><span style="width:26px">${x.stars}★</span><i style="width:${Math.round(x.count / max * 160)}px"></i><span>${x.count}</span></div>`).join('')}</div>` +
+        d.reviews.slice(0, 6).map((r) => `<div class="review"><span class="stars">${stars(r.rating)}</span> <b>${esc(r.name)}</b> <span class="muted">· ${fmt(r.created_at)}</span>${r.comment ? `<p>${esc(r.comment)}</p>` : ''}</div>`).join('')
+        : 'No reviews yet. After you park here you can rate this facility from My bookings.';
+    } catch (e) { $('revBody').textContent = 'Reviews are not available right now.'; }
+  }
+
+  (async () => {
+    try {
+      await loadFacility();
+      cfg = await api('/payments/config').catch(() => null);
+      if (cfg) $('rules').innerHTML = cfg.rules.map((x) => `<li>${esc(x)}</li>`).join('');
+      if (store.token) {
+        myVeh = await api('/vehicles').catch(() => []);
+        $('myVeh').innerHTML = myVeh.map((v) => `<option value="${esc(v.reg_no)}">${esc([v.brand, v.model].filter(Boolean).join(' ') || v.label || v.type)}</option>`).join('');
+        const pv = myVeh.find((v) => v.type === $('veh').value) || (qs.get('vehicle') ? null : myVeh[0]);
+        if (pv) { $('reg').value = pv.reg_no; useSaved(); }
+      }
+      await loadSlots(); loadReviews();
+    } catch (e) { $('fName').textContent = 'Facility not found'; toast(e.message, 'err'); }
+  })();
+</script>
+</body>
+</html>

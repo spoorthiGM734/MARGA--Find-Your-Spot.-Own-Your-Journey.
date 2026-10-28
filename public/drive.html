@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>MARGA – Drive guide</title>
+  <link rel="stylesheet" href="/css/style.css">
+  <link rel="manifest" href="/manifest.json">
+  <meta name="theme-color" content="#1b1f2b">
+  <link rel="icon" href="/img/favicon.png">
+  <link rel="apple-touch-icon" href="/img/apple-touch-icon.png">
+</head>
+<body>
+<header id="nav"></header>
+<main class="wrap drive" style="padding-top:18px;padding-bottom:60px">
+  <a href="/dashboard.html" class="muted">← My bookings</a>
+  <div id="root"><p class="muted mt">Loading your booking…</p></div>
+</main>
+
+<script src="/js/guide.js"></script>
+<script src="/js/i18n.js"></script>
+<script src="/js/common.js"></script>
+<script>
+  if (requireRole('driver', 'operator', 'admin')) init();
+  const ICON = {
+    straight: '<path d="M12 21V5M5 12l7-7 7 7"/>', left: '<path d="M17 21v-7a4 4 0 0 0-4-4H6M10 4 5 9l5 5"/>', right: '<path d="M7 21v-7a4 4 0 0 1 4-4h7M14 4l5 5-5 5"/>',
+    uturn: '<path d="M7 21V9a5 5 0 0 1 10 0v7M13 12l4 4 4-4"/>', flag: '<path d="M6 21V4M6 4h11l-2 4 2 4H6"/>',
+  };
+  const icon = (k, cls = '') => `<svg class="ico ${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round">${ICON[k] || ICON.straight}</svg>`;
+  const iconFor = (st) => (st.arrive ? 'flag' : st.kind === 'start' || st.kind === 'start_slot' || st.kind === 'exit_start' || st.kind === 'straight' ? 'straight' : st.turn === 'left' ? 'left' : st.turn === 'right' ? 'right' : st.turn === 'uturn' ? 'uturn' : 'straight');
+  const lang = () => (window.MargaI18n && window.MargaI18n.lang) || 'en';
+  const TTS = { en: 'en-IN', hi: 'hi-IN', kn: 'kn-IN' };
+
+  let b, fac, slot, view, mode = 'in', route = null, ctx = null;
+  let s = 0, playing = false, last = 0, raf = 0, idx = -1, announced = -1, preDone = new Set(), speed = 2.0, voiceOn = true;
+
+  async function init() {
+    renderNav();
+    const id = new URLSearchParams(location.search).get('id');
+    try {
+      b = await api('/bookings/' + id);
+      const d = await api(`/facilities/${b.facility_id}/slots?start=${encodeURIComponent(b.start_time)}&end=${encodeURIComponent(b.end_time)}`);
+      fac = d.facility; view = d.slots; slot = view.find((x) => x.id === b.slot_id);
+      if (!slot) throw new Error('Slot not found');
+    } catch (e) { $('root').innerHTML = `<div class="card mt"><h3>Booking not found</h3><p class="muted">${esc(e.message)}</p><a class="btn" href="/dashboard.html">Back to my bookings</a></div>`; return; }
+    ctx = { label: slot.label, w: slot.w, h: slot.h, id: b.ref };
+    build(); setMode('in');
+    window.addEventListener('marga:lang', () => { renderSteps(); showStep(true); });
+  }
+
+  function build() {
+    const tags = [slot.ev ? '<span class="tag lime">⚡ EV charging</span>' : '', slot.covered ? '<span class="tag">☂ Covered</span>' : '<span class="tag">Open air</span>', slot.accessible ? '<span class="tag">♿ Accessible</span>' : '', slot.max_height ? `<span class="tag">Max height ${slot.max_height} m</span>` : ''].join('');
+    $('root').innerHTML = `
+    <div class="card id-card mt">
+      <div><p class="note" style="margin:0">Your Parking ID</p><div class="pid">${esc(b.ref)}</div>
+        <div class="row gap wrap-sm mt"><button class="btn ghost sm" id="copyId">Copy</button><button class="btn ghost sm" id="shareBtn">Share</button>${badge(b.status)}</div>
+        <p class="muted mt">${esc(b.facility_name)} · ${esc(b.reg_no)} · ${fmt(b.start_time)} → ${fmt(b.end_time)}</p><div class="mt">${tags}</div></div>
+      <div class="slot-box"><span class="note">Slot</span><div class="slot-big">${esc(slot.label.replace('Slot ', ''))}</div><div class="muted">${sizeText(slot)}</div></div>
+    </div>
+    <div class="drive-grid mt">
+      <div class="map-col"><div class="seg"><button id="tIn" class="on">To my slot</button><button id="tOut">To the exit</button></div>
+        <div class="card map-card"><div class="row between"><b>Mini map</b><button class="btn ghost sm" id="bigMap">⤢ Bigger map</button></div>
+          <div class="layout-box" id="routeBox"></div>
+          <div class="legend"><span><i style="background:#b7ff3c"></i>Your slot</span><span><i style="background:#fff"></i>You</span><span>— Route</span><span>▲ Entry</span><span>▼ Exit</span></div></div></div>
+      <div class="nav-col">
+        <div class="card nav-card"><div class="turn"><div class="arrow" id="arrow"></div><div><div class="dist" id="dist">—</div><div class="instr" id="instr"></div></div></div>
+          <p class="then" id="then"></p><div class="progress"><i id="bar"></i></div><div class="row between note"><span id="remain"></span><span id="eta"></span></div>
+          <div class="ctl"><button class="btn" id="play">▶ Start guidance</button><button class="btn ghost" id="prev">⏮ Back</button><button class="btn ghost" id="next">Next ⏭</button><button class="btn ghost" id="again">🔁 Repeat</button></div>
+          <div class="row gap wrap-sm mt"><label class="chip-cb on"><input type="checkbox" id="voice" checked> 🔊 Voice</label>
+            <label class="note" style="margin:0">Speed <select id="speed" style="width:auto;display:inline-block"><option value="1.2">Slow</option><option value="2" selected>Normal</option><option value="3">Fast</option></select></label></div>
+          <div id="parkBox" class="mt"></div></div>
+        <ol class="steps" id="steps"></ol>
+        <p class="note">The guide follows the published layout at the speed you choose. It cannot see your car’s live position (phone GPS is not accurate enough inside a car park), so use Pause, Back and Next to stay in step with what you see. Please don’t use your phone while driving - let a passenger help, or use the voice prompts.</p>
+      </div>
+    </div>`;
+    $('copyId').onclick = async () => { try { await navigator.clipboard.writeText(b.ref); toast('Parking ID copied'); } catch (e) { toast(b.ref); } };
+    $('shareBtn').onclick = async () => {
+      const text = `My MARGA parking: ${b.ref} · ${slot.label} at ${b.facility_name}`;
+      if (navigator.share) { try { await navigator.share({ title: 'My parking', text }); } catch (e) {} } else { try { await navigator.clipboard.writeText(text); toast('Details copied'); } catch (e) { toast(text); } }
+    };
+    $('tIn').onclick = () => setMode('in'); $('tOut').onclick = () => setMode('out');
+    $('bigMap').onclick = () => { document.body.classList.toggle('map-full'); $('bigMap').textContent = document.body.classList.contains('map-full') ? '✕ Close' : '⤢ Bigger map'; };
+    $('play').onclick = toggle; $('again').onclick = () => { announced = -1; showStep(true); };
+    $('prev').onclick = () => seek(Math.max(0, idx - 1)); $('next').onclick = () => seek(Math.min(route.steps.length - 1, idx + 1));
+    $('speed').onchange = () => (speed = +$('speed').value);
+    $('voice').onchange = (e) => { voiceOn = e.target.checked; e.target.closest('.chip-cb').classList.toggle('on', voiceOn); if (!voiceOn && window.speechSynthesis) speechSynthesis.cancel(); };
+  }
+
+  function setMode(m) {
+    mode = m; stop(); s = 0; idx = -1; announced = -1; preDone = new Set();
+    $('tIn').classList.toggle('on', m === 'in'); $('tOut').classList.toggle('on', m === 'out');
+    route = Guide.buildRoute(fac, view, slot.id, m);
+    if (!route) { $('instr').textContent = 'A route could not be drawn for this layout. Please follow the signs and the operator.'; return; }
+    drawMap(); renderSteps(); showStep(false); $('play').textContent = '▶ Start guidance'; park();
+  }
+
+  function drawMap() {
+    renderLayout($('routeBox'), fac, view, { mine: { [slot.id]: b.ref } });
+    const svg = $('routeBox').querySelector('svg'), pts = route.points.map((p) => `${p.x},${p.y}`).join(' ');
+    svg.insertAdjacentHTML('beforeend', `<polyline class="route" points="${pts}"/><polyline class="route-done" id="done" points=""/><g id="car" class="car"><circle r="1.6" class="halo"/><circle r="0.9"/></g>`);
+    placeCar();
+  }
+  function placeCar() {
+    const p = Guide.pointAt(route, s), car = document.getElementById('car'); if (!car) return;
+    car.setAttribute('transform', `translate(${p.x} ${p.y})`);
+    const done = [route.points[0]]; let acc = 0;
+    for (const st of route.steps) { if (st.arrive) break; if (s >= st.start + st.len - 1e-6) { done.push(st.to); acc = st.start + st.len; } else break; }
+    done.push(p); document.getElementById('done').setAttribute('points', done.map((q) => `${q.x},${q.y}`).join(' '));
+  }
+  const txt = (st, speech) => Guide.stepText(st, ctx, lang(), speech);
+  function renderSteps() {
+    $('steps').innerHTML = route.steps.map((st, i) => `<li data-i="${i}" class="${i < idx ? 'done' : i === idx ? 'on' : ''}">${icon(iconFor(st), 'sm')}<span>${esc(txt(st))}</span>${st.len ? `<em>${Math.max(1, Math.round(st.len))} m</em>` : ''}</li>`).join('');
+    $('steps').onclick = (e) => { const li = e.target.closest('li'); if (li) seek(+li.dataset.i); };
+  }
+  function stepIndexAt(x) { let k = 0; route.steps.forEach((st, i) => { if (st.start <= x + 1e-6) k = i; }); return k; }
+  function showStep(force) {
+    if (!route) return;
+    const i = idx < 0 ? 0 : idx, st = route.steps[i], next = route.steps[i + 1];
+    $('arrow').innerHTML = icon(iconFor(st)); $('instr').textContent = txt(st);
+    const left = st.arrive ? 0 : Math.max(0, st.start + st.len - s);
+    $('dist').textContent = st.arrive ? '🏁' : `${Math.max(1, Math.round(left))} m`;
+    $('then').textContent = next && !next.arrive ? Guide.preText(st, next, Math.max(1, Math.round(left)), lang()) : '';
+    $('bar').style.width = `${route.total ? Math.min(100, (s / route.total) * 100) : 100}%`;
+    $('remain').textContent = `${Math.max(0, Math.round(route.total - s))} m to go`;
+    const secs = Math.max(0, (route.total - s) / speed); $('eta').textContent = playing || s > 0 ? `about ${Math.floor(secs / 60)}:${String(Math.round(secs % 60)).padStart(2, '0')} left` : `about ${Math.max(1, Math.round(route.total / speed / 60))} min`;
+    $('steps').querySelectorAll('li').forEach((li, k) => { li.className = k < i ? 'done' : k === i ? 'on' : ''; });
+    if (force || announced !== i) { announced = i; if (playing || force) say(txt(st, true)); }
+  }
+  function say(t) {
+    if (!voiceOn || !('speechSynthesis' in window)) return;
+    try { speechSynthesis.cancel(); const u = new SpeechSynthesisUtterance(t); u.lang = TTS[lang()] || 'en-IN'; u.rate = 0.95; speechSynthesis.speak(u); } catch (e) {}
+  }
+  function toggle() {
+    if (playing) return stop();
+    if (!route) return;
+    if (s >= route.total) { s = 0; idx = -1; announced = -1; preDone = new Set(); }
+    if (lang() !== 'en' && 'speechSynthesis' in window && speechSynthesis.getVoices().length && !speechSynthesis.getVoices().some((v) => v.lang.toLowerCase().startsWith(lang())))
+      toast('This device has no voice for the chosen language, so prompts are shown as text only.');
+    playing = true; last = performance.now(); $('play').textContent = '⏸ Pause';
+    if (navigator.wakeLock) navigator.wakeLock.request('screen').catch(() => {});
+    idx = stepIndexAt(s); announced = -1; showStep(true); raf = requestAnimationFrame(tick);
+  }
+  function stop() { playing = false; cancelAnimationFrame(raf); if (window.speechSynthesis) speechSynthesis.cancel(); const p = document.getElementById('play'); if (p) p.textContent = s > 0 && route && s < route.total ? '▶ Resume' : '▶ Start guidance'; }
+  function tick(now) {
+    if (!playing) return;
+    const dt = Math.min(0.25, (now - last) / 1000); last = now; s = Math.min(route.total, s + speed * dt);
+    const i = stepIndexAt(s); const changed = i !== idx; idx = i;
+    const st = route.steps[i], left = st.start + st.len - s, next = route.steps[i + 1];
+    if (!st.arrive && next && !next.arrive && st.len > 6 && left <= 8 && !preDone.has(i)) { preDone.add(i); say(Guide.preText(st, next, Math.max(1, Math.round(left)), lang())); }
+    if (!st.arrive && next && next.kind === 'slot' && st.len > 6 && left <= 8 && !preDone.has('slot' + i)) { preDone.add('slot' + i); say(Guide.preText(st, next, Math.max(1, Math.round(left)), lang())); }
+    placeCar(); showStep(changed);
+    if (s >= route.total) { playing = false; $('play').textContent = '↺ Start again'; park(true); return; }
+    raf = requestAnimationFrame(tick);
+  }
+  function seek(i) { s = route.steps[i].start; idx = i; announced = -1; preDone = new Set(); placeCar(); showStep(true); if (!playing) $('play').textContent = '▶ Resume'; }
+
+  function park(arrived) {
+    const box = $('parkBox'); if (!box) return;
+    if (mode === 'in') {
+      if (b.status === 'confirmed') box.innerHTML = `<button class="btn block" id="ciBtn">✅ I’ve parked – check me in</button><p class="note">${arrived ? 'You have arrived. ' : ''}Tap once your vehicle is in ${esc(slot.label)}. If you parked in a different slot, you can say so in the next step.</p>`;
+      else if (b.status === 'checked_in') box.innerHTML = `<div class="info-box">You are checked in. When you are ready to leave, tap “To the exit”.</div><button class="btn ghost block" id="toExit">Show the way to the exit</button>`;
+      else box.innerHTML = `<p class="note">This booking is ${esc(b.status.replace('_', ' '))}.</p>`;
+    } else box.innerHTML = '<p class="note">Check out from My bookings when you reach the gate, so the fee and your slot are settled.</p><a class="btn ghost block" href="/dashboard.html">Go to my bookings</a>';
+    const ci = document.getElementById('ciBtn'); if (ci) ci.onclick = () => checkinDialog(b, `/bookings/${b.id}/checkin`, true, async () => { b = await api('/bookings/' + b.id); park(); });
+    const te = document.getElementById('toExit'); if (te) te.onclick = () => setMode('out');
+  }
+</script>
+</body>
+</html>

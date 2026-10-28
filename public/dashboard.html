@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>MARGA – My dashboard</title>
+  <link rel="stylesheet" href="/css/style.css">
+  <link rel="manifest" href="/manifest.json">
+  <meta name="theme-color" content="#1b1f2b">
+  <link rel="icon" href="/img/favicon.png">
+  <link rel="apple-touch-icon" href="/img/apple-touch-icon.png">
+</head>
+<body>
+<header id="nav"></header>
+<main class="wrap" style="padding-top:28px;padding-bottom:60px">
+  <div class="row between wrap-sm"><div><h1 id="hi">My dashboard</h1><p class="muted">Manage your bookings, check in, and view receipts.</p></div><a class="btn" href="/search.html">+ Find parking</a></div>
+
+  <div class="grid4 mt">
+    <div class="stat"><b id="sUp">0</b><span>Upcoming</span></div>
+    <div class="stat"><b id="sAct">0</b><span>Parked now</span></div>
+    <div class="stat"><b id="sDone">0</b><span>Completed</span></div>
+    <div class="stat"><b id="sSpent">₹0</b><span>Total spent</span></div>
+  </div>
+
+  <div class="tabs"><button data-t="bk" class="on">My bookings</button><button data-t="veh">My vehicles</button><button data-t="rep">My reports</button></div>
+
+  <section id="t-bk"><div id="list"></div></section>
+
+  <section id="t-veh" hidden>
+    <div class="grid2" style="align-items:start">
+      <div class="card"><h3>Add a vehicle</h3>
+        <label>Registration number</label><input id="vReg" placeholder="DL01AB1234">
+        <label>Type</label><select id="vType"><option value="car">Car</option><option value="suv">SUV</option><option value="bike">Bike</option></select>
+        <label>Brand and model</label><input id="vModel" list="vModels" placeholder="e.g. Maruti Suzuki Swift" autocomplete="off"><datalist id="vModels"></datalist>
+        <p class="note" id="vNote">We read the brand and model and set your vehicle’s size automatically - you never need to enter measurements.</p>
+        <label>Nickname (optional)</label><input id="vLabel">
+        <label class="chip-cb" style="display:flex;margin-top:12px"><input type="checkbox" id="vEv"> ⚡ This is an electric vehicle</label>
+        <button class="btn block mt" id="vAdd">Add vehicle</button></div>
+      <div id="vList"></div>
+    </div>
+  </section>
+
+  <section id="t-rep" hidden><div id="repList"></div></section>
+</main>
+
+<script src="/js/i18n.js"></script>
+<script src="/js/common.js"></script>
+<script>
+  if (requireRole('driver', 'operator', 'admin')) init();
+  let bookings = [], reviewed = new Set(), cfg = null;
+  const tags = (b) => [b.slot_ev ? '<span class="tag lime">⚡ EV charging</span>' : '', b.slot_covered ? '<span class="tag">☂ Covered</span>' : '', b.slot_accessible ? '<span class="tag">♿ Accessible</span>' : '', b.slot_max_height ? `<span class="tag">Max height ${b.slot_max_height} m</span>` : ''].join('');
+  const CATS = { overcharged: 'I was overcharged', slot_taken: 'My slot was taken by someone else', wrong_slot: 'Wrong slot or wrong directions', facility_closed: 'The facility was closed or I could not enter', refund_not_received: 'I did not get my refund', other: 'Something else' };
+
+  async function init() {
+    renderNav();
+    $('hi').textContent = 'Hello, ' + store.user.name.split(' ')[0] + ' 👋';
+    document.querySelectorAll('.tabs button').forEach((b) => (b.onclick = () => {
+      document.querySelectorAll('.tabs button').forEach((x) => x.classList.toggle('on', x === b));
+      ['bk', 'veh', 'rep'].forEach((t) => ($('t-' + t).hidden = t !== b.dataset.t));
+    }));
+    cfg = await api('/payments/config').catch(() => null);
+    loadBookings(); loadVehicles(); loadReports();
+  }
+
+  async function loadBookings() {
+    try { bookings = await api('/bookings/mine'); reviewed = new Set(await api('/reviews/mine').catch(() => [])); } catch (e) { return toast(e.message, 'err'); }
+    $('sUp').textContent = bookings.filter((b) => b.status === 'confirmed').length;
+    $('sAct').textContent = bookings.filter((b) => ['checked_in', 'awaiting_payment'].includes(b.status)).length;
+    $('sDone').textContent = bookings.filter((b) => b.status === 'completed').length;
+    $('sSpent').textContent = inr(bookings.reduce((a, b) => a + (b.status === 'completed' ? b.fee || 0 : 0) + (['cancelled', 'no_show'].includes(b.status) ? 0 : 0), 0));
+    $('list').innerHTML = bookings.length ? bookings.map(card).join('')
+      : '<div class="card"><h3>No bookings yet</h3><p class="muted">Search for parking near your destination to make your first reservation.</p></div>';
+  }
+
+  function card(b) {
+    const act = b.status === 'checked_in', live = ['confirmed', 'checked_in'].includes(b.status);
+    const feeRow = b.advance_amount > 0 && b.status === 'confirmed'
+      ? `<p class="muted">${b.advance_paid > 0 ? `Booking fee <b style="color:var(--lime)">${inr(b.advance_paid)}</b> paid` : `Booking fee <b>${inr(b.advance_amount)}</b> not paid yet`}</p>` : '';
+    return `<div class="card bk">
+      <div class="row between"><div><h3>${esc(b.facility_name)}</h3><p class="muted">${esc(b.facility_address)}</p></div>${badge(b.status)}</div>
+      <div class="kv"><span>Parking ID</span><b style="letter-spacing:.06em">${esc(b.ref)}</b><span>Slot</span><b>${esc(b.slot_label)} · ${sizeText({ w: b.slot_w, h: b.slot_h })}</b><span>Features</span><b>${tags(b) || '—'}</b>
+        <span>Vehicle</span><b>${esc(b.reg_no)}</b><span>Time</span><b>${fmt(b.start_time)} → ${fmt(b.end_time)}</b>
+        ${b.rate_multiplier && b.rate_multiplier !== 1 ? `<span>Price</span><b><span class="badge ${b.rate_multiplier > 1 ? 'b-warn' : 'b-ok'}">${b.rate_multiplier > 1 ? 'Busy-time price' : 'Quiet-time discount'} ×${b.rate_multiplier}</span></b>` : ''}</div>
+      ${feeRow}
+      ${b.mismatch ? `<div class="warn-box">You parked in <b>${esc(b.actual_slot_label)}</b> instead of ${esc(b.slot_label)}. ${b.resolution_note ? 'Operator note: ' + esc(b.resolution_note) : 'The operator has been notified.'}</div>` : ''}
+      ${act ? `<p class="muted">Running fee so far: <b style="color:var(--lime)">${inr(b.fee_estimate)}</b> · ${b.occupancy_verified ? 'verified by operator' : 'occupancy unverified'}</p>` : ''}
+      ${b.status === 'awaiting_payment' ? `<div class="warn-box">Checked out · amount due <b>${inr(b.due)}</b>${b.advance_paid ? ` (total ${inr(b.fee)} − booking fee ${inr(b.advance_paid)})` : ''}. Your slot is released once the payment is confirmed.</div>` : ''}
+      ${b.status === 'completed' ? `<p>Paid <b style="color:var(--lime)">${inr(b.fee)}</b> · ${b.duration_min} min</p>` : ''}
+      ${b.status === 'no_show' ? '<p class="muted">Released because you did not check in within the grace period.</p>' : ''}
+      <div class="row gap wrap-sm mt">
+        ${b.status === 'confirmed' ? `<button class="btn sm" data-a="in" data-id="${b.id}">Check in</button>` : ''}
+        ${b.status === 'confirmed' && b.advance_amount > 0 && !(b.advance_paid > 0) ? `<button class="btn sm" data-a="payadv" data-id="${b.id}">Pay booking fee ${inr(b.advance_amount)}</button>` : ''}
+        ${act ? `<button class="btn sm" data-a="out" data-id="${b.id}">Check out &amp; pay</button>` : ''}
+        ${b.status === 'awaiting_payment' ? `<button class="btn sm" data-a="pay" data-id="${b.id}">Pay ${inr(b.due)}</button>` : ''}
+        ${live ? `<a class="btn sm" href="/drive.html?id=${b.id}">Drive guide</a><button class="btn ghost sm" data-a="qr" data-id="${b.id}">QR pass</button><a class="btn ghost sm" target="_blank" href="https://www.google.com/maps/dir/?api=1&destination=${b.lat},${b.lng}">Navigate</a>` : ''}
+        ${b.status === 'confirmed' ? `<button class="btn ghost sm" data-a="cancel" data-id="${b.id}">Cancel</button>` : ''}
+        ${b.status === 'completed' ? `<button class="btn ghost sm" data-a="rec" data-id="${b.id}">Receipt</button>${reviewed.has(b.id) ? '<span class="tag">Reviewed ✓</span>' : `<button class="btn ghost sm" data-a="rate" data-id="${b.id}">★ Rate</button>`}` : ''}
+        ${b.status !== 'confirmed' ? `<button class="btn ghost sm" data-a="report" data-id="${b.id}">Report a problem</button>` : ''}
+      </div></div>`;
+  }
+
+  function cancelText(b) {
+    const paid = b.advance_paid || 0;
+    if (!paid) return 'Cancel this booking?';
+    const mins = (new Date(b.start_time) - Date.now()) / 60000, full = cfg ? cfg.full_refund_minutes : 60, part = cfg ? cfg.partial_pct : 50;
+    const pct = mins >= full ? 100 : mins >= 0 ? part : 0;
+    return `Cancel this booking?\n\nYou paid a booking fee of ${inr(paid)}. Under the cancellation rules you will get ${inr(paid * pct / 100)} back (${pct}%).`;
+  }
+
+  $('list').addEventListener('click', async (e) => {
+    const btn = e.target.closest('button[data-a]'); if (!btn) return;
+    const b = bookings.find((x) => x.id === +btn.dataset.id); const a = btn.dataset.a;
+    try {
+      if (a === 'in') await checkinDialog(b, `/bookings/${b.id}/checkin`, true, loadBookings);
+      if (a === 'payadv') payOnline(b.id, 'advance', () => loadBookings());
+      if (a === 'cancel' && confirm(cancelText(b))) {
+        const r = await api(`/bookings/${b.id}/cancel`, { method: 'POST' });
+        toast(r.refund && r.refund.refunded ? `Booking cancelled. ${inr(r.refund.refunded)} refunded (${r.refund_pct}%).` : 'Booking cancelled'); loadBookings();
+      }
+      if (a === 'out' && confirm('Check out now? Your fee will be calculated from your check-in time.')) {
+        const r = await api(`/bookings/${b.id}/checkout`, { method: 'POST' }); loadBookings();
+        if (r.status === 'completed') receiptModal(r); else paymentModal(r.id, { onDone: loadBookings });
+      }
+      if (a === 'pay') paymentModal(b.id, { onDone: loadBookings });
+      if (a === 'rec') receiptModal(b);
+      if (a === 'qr') { const r = await api('/bookings/' + b.id); modal(`<h3>${esc(r.slot_label)} · ${esc(r.facility_name)}</h3><div style="text-align:center;margin:14px 0"><img src="${r.qr}" style="width:220px;border-radius:12px"><p class="note">Your Parking ID</p><h2>${esc(r.ref)}</h2></div><p class="note">Show this code to the operator at the gate. They scan it to check you in and out. You pay online when you leave.</p>`); }
+      if (a === 'rate') rateModal(b);
+      if (a === 'report') reportModal(b);
+    } catch (err) { toast(err.message, 'err'); }
+  });
+
+  function rateModal(b) {
+    let rating = 0;
+    const m = modal(`<h3>Rate ${esc(b.facility_name)}</h3><div id="starRow" style="font-size:2rem;cursor:pointer;margin:10px 0">${[1, 2, 3, 4, 5].map((n) => `<span data-n="${n}">☆</span>`).join(' ')}</div>
+      <label>Your review (optional)</label><textarea id="rvText" maxlength="600" placeholder="How was parking here?"></textarea><button class="btn block mt" id="rvGo">Submit review</button>`);
+    const paint = () => m.querySelectorAll('#starRow span').forEach((s) => { s.textContent = +s.dataset.n <= rating ? '★' : '☆'; s.style.color = +s.dataset.n <= rating ? 'var(--warn)' : ''; });
+    m.querySelector('#starRow').onclick = (e) => { if (e.target.dataset.n) { rating = +e.target.dataset.n; paint(); } };
+    m.querySelector('#rvGo').onclick = async () => {
+      if (!rating) return toast('Choose a star rating first', 'err');
+      try { await api('/reviews', { method: 'POST', body: { booking_id: b.id, rating, comment: m.querySelector('#rvText').value } }); m.close(); toast('Thank you for your review'); loadBookings(); } catch (e) { toast(e.message, 'err'); }
+    };
+  }
+  function reportModal(b) {
+    const m = modal(`<h3>Report a problem</h3><p class="muted">${esc(b.facility_name)} · ${esc(b.ref)}</p><label>What happened?</label>
+      <select id="rpCat">${Object.entries(CATS).map(([k, v]) => `<option value="${k}">${v}</option>`).join('')}</select>
+      <label>Tell us more</label><textarea id="rpText" maxlength="1000" placeholder="Please describe the problem (at least 10 characters)"></textarea>
+      <p class="note">The facility operator reviews your report. If it is valid they can refund all or part of what you paid.</p><button class="btn block" id="rpGo">Send report</button>`);
+    m.querySelector('#rpGo').onclick = async () => {
+      try { await api('/disputes', { method: 'POST', body: { booking_id: b.id, category: m.querySelector('#rpCat').value, description: m.querySelector('#rpText').value } }); m.close(); toast('Report sent'); loadReports(); } catch (e) { toast(e.message, 'err'); }
+    };
+  }
+  async function loadReports() {
+    const l = await api('/disputes/mine').catch(() => []);
+    $('repList').innerHTML = l.length ? l.map((d) => `<div class="card bk"><div class="row between"><div><h3>${esc(CATS[d.category] || d.category)}</h3><p class="muted">${esc(d.facility_name)} · ${esc(d.ref)} · ${fmt(d.created_at)}</p></div>${badge(d.status === 'open' ? 'pending' : d.status === 'refunded' ? 'approved' : 'rejected').replace(/>[^<]*</, '>' + d.status + '<')}</div>
+      <p>${esc(d.description)}</p>${d.resolution_note ? `<div class="info-box"><b>Operator’s reply:</b> ${esc(d.resolution_note)}${d.refund_amount ? `<br>Refund: <b>${inr(d.refund_amount)}</b>` : ''}</div>` : ''}</div>`).join('')
+      : '<div class="card"><p class="muted">You have not reported any problems. If something goes wrong with a booking, use “Report a problem” on that booking.</p></div>';
+  }
+
+  /* ---------- vehicles: the size is found from the brand and model ---------- */
+  let vTimer, vsTimer;
+  async function vDetect() {
+    const t = $('vModel').value.trim(); if (!t) { $('vNote').textContent = 'We read the brand and model and set your vehicle’s size automatically - you never need to enter measurements.'; return; }
+    try { const r = await api(`/vehicles/resolve?text=${encodeURIComponent(t)}&type=${$('vType').value}`); $('vNote').innerHTML = (r.matched ? '✓ ' : '') + esc(r.note); if (r.matched) $('vType').value = r.type; if (r.ev) $('vEv').checked = true; } catch (e) {}
+  }
+  $('vModel').addEventListener('input', () => {
+    clearTimeout(vTimer); vTimer = setTimeout(vDetect, 400);
+    clearTimeout(vsTimer); vsTimer = setTimeout(async () => { const q = $('vModel').value.trim(); if (q.length < 2) return;
+      try { const l = await api(`/vehicles/models?q=${encodeURIComponent(q)}&type=${$('vType').value}`); $('vModels').innerHTML = l.map((x) => `<option value="${esc(x)}">`).join(''); } catch (e) {} }, 200);
+  });
+  $('vType').onchange = vDetect;
+  async function loadVehicles() {
+    const list = await api('/vehicles').catch(() => []);
+    $('vList').innerHTML = list.length ? list.map((v) => `<div class="card row between" style="margin-bottom:12px"><div><h3>${esc(v.reg_no)} ${v.is_ev ? '<span class="tag lime">⚡ EV</span>' : ''}</h3><p class="muted">${esc([v.brand, v.model].filter(Boolean).join(' ') || v.type)} ${v.label ? '· ' + esc(v.label) : ''}</p><p class="note">Size set automatically</p></div><button class="btn ghost sm" data-del="${v.id}">Remove</button></div>`).join('')
+      : '<div class="card"><p class="muted">No vehicles saved yet.</p></div>';
+  }
+  $('vAdd').onclick = async () => {
+    try { const r = await api('/vehicles', { method: 'POST', body: { reg_no: $('vReg').value, type: $('vType').value, model_text: $('vModel').value, label: $('vLabel').value, is_ev: $('vEv').checked } });
+      $('vReg').value = ''; $('vLabel').value = ''; $('vModel').value = ''; $('vEv').checked = false; toast(r.detected && r.detected.matched ? `Added - ${r.brand} ${r.model} recognised` : 'Vehicle added'); loadVehicles(); vDetect(); }
+    catch (e) { toast(e.message, 'err'); }
+  };
+  $('vList').addEventListener('click', async (e) => {
+    const id = e.target.dataset.del; if (!id) return;
+    await api('/vehicles/' + id, { method: 'DELETE' }); loadVehicles();
+  });
+</script>
+</body>
+</html>

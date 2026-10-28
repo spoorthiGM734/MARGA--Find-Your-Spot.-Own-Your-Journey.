@@ -1,0 +1,384 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>MARGA – Operator dashboard</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+  <link rel="stylesheet" href="/css/style.css">
+  <link rel="manifest" href="/manifest.json">
+  <meta name="theme-color" content="#1b1f2b">
+  <link rel="icon" href="/img/favicon.png">
+  <link rel="apple-touch-icon" href="/img/apple-touch-icon.png">
+</head>
+<body>
+<header id="nav"></header>
+<main class="wrap" style="padding-top:28px;padding-bottom:60px">
+  <div class="row between wrap-sm">
+    <h1>Operator dashboard</h1>
+    <div class="row gap wrap-sm"><select id="facSel" style="min-width:230px"></select><button class="btn" id="newFac">+ Register facility</button></div>
+  </div>
+
+  <div id="empty" class="card mt" hidden><h3>No facilities yet</h3><p class="muted">Register your first parking facility. After admin verification it becomes bookable.</p></div>
+
+  <div id="panel" hidden>
+    <div class="tabs">
+      <button data-t="overview" class="on">Overview</button><button data-t="layout">Layout</button><button data-t="bookings">Bookings &amp; sessions</button><button data-t="disputes">Driver reports</button>
+    </div>
+
+    <!-- OVERVIEW -->
+    <section id="t-overview">
+      <div id="statusBox"></div>
+      <div class="grid4 mt" id="stats"></div>
+      <div class="card mt row between wrap-sm"><div id="facInfo"></div><button class="btn ghost" id="editFac">Edit details &amp; tariff</button></div>
+      <div class="card mt" id="mlCard"></div>
+    </section>
+
+    <!-- LAYOUT -->
+    <section id="t-layout" hidden>
+      <div class="card">
+        <h3>Entry and exit gates</h3>
+        <p class="note">Mark where vehicles enter and where they leave. When you generate the layout, MARGA plans the driving lanes and numbers the slots around these gates: slots closest to the gates come first, accessible and EV-charging slots are placed nearest the gates, and every aisle connects the entry to the exit. The gates are drawn on the layout below as you move them.</p>
+        <div class="grid4">
+          <div><label>Vehicles enter on the</label><select id="gtEntrySide"><option value="bottom">Bottom side</option><option value="top">Top side</option><option value="left">Left side</option><option value="right">Right side</option></select></div>
+          <div><label>Entry position along that side</label><input id="gtEntryPos" type="range" min="5" max="95" value="50"></div>
+          <div><label>Vehicles leave on the</label><select id="gtExitSide"><option value="">Same gate as the entry</option><option value="bottom">Bottom side</option><option value="top">Top side</option><option value="left">Left side</option><option value="right">Right side</option></select></div>
+          <div><label>Exit position along that side</label><input id="gtExitPos" type="range" min="5" max="95" value="50"></div>
+        </div>
+        <div class="row gap mt wrap-sm"><button class="btn" id="gtSave">Save gates</button><span class="note" style="margin:0">After saving, generate the layout again (below) so the slots are planned around the gates.</span></div>
+      </div>
+      <div class="card mt">
+        <div class="row between wrap-sm"><h3>Digital layout generator</h3><span id="layoutStatus"></span></div>
+        <p class="note">Enter the site’s measured dimensions. Marga proposes numbered virtual slots using vehicle size, driving aisles and a 1 m safety margin. Review, drag slots to adjust, block any you don’t want, then publish. The layout is only a proposed arrangement – it must be calibrated to the real site and does not certify the land as legally or physically suitable for parking.</p>
+        <div class="grid4">
+          <div><label>Site width (m)</label><input id="gW" type="number" min="5" step="0.5" value="20"></div>
+          <div><label>Site length (m)</label><input id="gL" type="number" min="5" step="0.5" value="15"></div>
+          <div><label>Vehicle type</label><select id="gV"><option value="car">Car (2.5 × 5 m)</option><option value="suv">SUV (2.7 × 5.5 m)</option><option value="bike">Bike (1 × 2 m)</option></select></div>
+          <div><label>Driving aisle (m)</label><input id="gA" type="number" min="3" step="0.5" value="6"></div>
+          <div><label>Spaces to allocate to Marga (0 = max)</label><input id="gM" type="number" min="0" value="5"></div>
+          <div><label>First slot number</label><input id="gS" type="number" min="1" value="31"></div>
+          <div><label>EV charging slots (blank = automatic)</label><input id="gEv" type="number" min="0"></div>
+          <div><label>Accessible slots (blank = automatic)</label><input id="gAcc" type="number" min="0"></div>
+          <div><label>Covered</label><select id="gCov"><option value="">As set for the facility</option><option value="all">All slots covered</option><option value="half">Half covered</option><option value="none">Open air</option></select></div>
+          <div><label>Height limit (m)</label><input id="gH" type="number" step="0.1" min="0.5" max="6"></div>
+          <div style="grid-column:span 2"><label>Obstacles – one per line: x,y,width,height (metres)</label><textarea id="gO" placeholder="e.g. 8,6,2,2"></textarea></div>
+        </div>
+        <div class="row gap mt wrap-sm"><button class="btn" id="gen">Generate layout</button><button class="btn ghost" id="pub">Publish layout</button></div>
+      </div>
+
+      <div class="grid2 mt" style="grid-template-columns:1.6fr 1fr;align-items:start">
+        <div><div class="layout-box" id="layoutBox"><p class="muted" style="padding:20px">No layout yet.</p></div>
+          <div class="legend"><span><i style="background:rgba(183,255,60,.5)"></i>Free</span><span><i style="background:rgba(255,200,87,.6)"></i>Reserved</span><span><i style="background:rgba(255,107,107,.6)"></i>Occupied</span><span><i style="background:#555b73"></i>Blocked</span></div>
+          <p class="note">Tip: click a slot to select it, or drag it to a new position.</p></div>
+        <div class="card" id="slotPanel"><h3>Slot details</h3><p class="muted mt">Select a slot on the layout.</p></div>
+      </div>
+    </section>
+
+    <!-- BOOKINGS -->
+    <section id="t-bookings" hidden>
+      <div class="card"><div class="row gap wrap-sm"><button class="btn" id="scanBtn">📷 Scan booking QR</button><span class="muted">or</span>
+        <input id="refIn" placeholder="Type booking reference, e.g. MRG-1A2B3C4D" style="max-width:340px"><button class="btn ghost" id="refGo">Find</button></div>
+        <p class="note">At entry, scan the driver’s QR to check them in. At exit, scan again to check out and collect payment. The slot becomes free after payment.</p></div>
+      <div class="row between wrap-sm mt"><h3>Reservations &amp; parking sessions</h3>
+        <select id="bFilter" style="width:180px"><option value="">All statuses</option><option>confirmed</option><option>checked_in</option><option>awaiting_payment</option><option>completed</option><option>cancelled</option><option>no_show</option></select></div>
+      <div class="card mt scroll-x"><table class="tbl"><thead><tr><th>Ref</th><th>Driver</th><th>Vehicle</th><th>Slot</th><th>Time</th><th>Status</th><th>Actions</th></tr></thead><tbody id="bBody"></tbody></table></div>
+      <p class="note">Reservation and occupancy are tracked separately. A driver check-in is shown as “unverified” until an operator confirms the vehicle on site.</p>
+    </section>
+
+    <!-- DRIVER REPORTS -->
+    <section id="t-disputes" hidden>
+      <h3>Reports from drivers</h3><p class="note">Review each report. If it is valid you can refund all or part of what the driver paid; either way, add a note the driver will see.</p>
+      <div id="dpList" class="mt"></div>
+    </section>
+  </div>
+</main>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>
+<script src="/js/i18n.js"></script>
+<script src="/js/common.js"></script>
+<script>
+  if (requireRole('operator', 'admin')) init();
+  let facs = [], cur = null, selSlot = null, layoutData = null, bookings = [];
+
+  function init() {
+    renderNav();
+    document.querySelectorAll('.tabs button').forEach((b) => (b.onclick = () => {
+      document.querySelectorAll('.tabs button').forEach((x) => x.classList.toggle('on', x === b));
+      ['overview', 'layout', 'bookings', 'disputes'].forEach((t) => ($('t-' + t).hidden = t !== b.dataset.t));
+      if (b.dataset.t === 'layout') loadLayout(); if (b.dataset.t === 'bookings') loadBookings(); if (b.dataset.t === 'disputes') loadDisputes();
+    }));
+    $('facSel').onchange = () => pick(+$('facSel').value);
+    $('newFac').onclick = () => facModal(null);
+    $('editFac').onclick = () => facModal(cur);
+    loadFacs();
+  }
+
+  async function loadFacs(selectId) {
+    facs = await api('/operator/facilities');
+    $('empty').hidden = facs.length > 0; $('panel').hidden = facs.length === 0;
+    $('facSel').innerHTML = facs.map((f) => `<option value="${f.id}">${esc(f.name)}</option>`).join('');
+    if (facs.length) { const id = selectId || (cur && cur.id) || facs[0].id; $('facSel').value = id; pick(id); }
+  }
+
+  function pick(id) {
+    cur = facs.find((f) => f.id === id); selSlot = null;
+    $('gW').value = cur.width_m || 20; $('gL').value = cur.length_m || 15; fillGates();
+    loadOverview();
+    if (!$('t-layout').hidden) loadLayout(); if (!$('t-bookings').hidden) loadBookings();
+  }
+
+  /* ---------- overview ---------- */
+  async function loadOverview() {
+    const f = cur;
+    $('statusBox').innerHTML = `<div class="card row between wrap-sm"><div><b>Verification:</b> ${badge(f.verification_status)} &nbsp; <b>Layout:</b> ${badge(f.layout_status)}
+      ${f.review_note ? `<p class="muted mt">Admin note: ${esc(f.review_note)}</p>` : ''}
+      ${f.verification_status === 'pending' ? '<p class="muted mt">Waiting for admin review of your ownership / authority details. You can prepare the layout meanwhile.</p>' : ''}</div></div>`;
+    $('facInfo').innerHTML = `<h3>${esc(f.name)}</h3><p class="muted">${esc(f.address)} · ${esc(f.kind.replace('_', ' '))}</p>
+      <p class="muted">${inr(f.hourly_rate)}/hr · min ${inr(f.min_charge)} · grace ${f.grace_minutes} min${f.daily_cap ? ' · cap ' + inr(f.daily_cap) + '/day' : ''} · open ${esc(f.open_time)}–${esc(f.close_time)}</p>`;
+    try {
+      loadModelCard();
+      const s = await api(`/operator/facilities/${f.id}/stats`);
+      $('stats').innerHTML = [['active_slots', 'Active slots'], ['upcoming', 'Upcoming bookings'], ['parked_now', 'Parked now'], ['awaiting_payment', 'Awaiting payment'], ['bookings_today', 'Bookings today'], ['mismatches', 'Slot mismatches to review'], ['revenue_today', 'Revenue today']]
+        .map(([k, l]) => `<div class="stat"><b>${k === 'revenue_today' ? inr(s[k]) : s[k]}</b><span>${l}</span></div>`).join('');
+    } catch (e) { toast(e.message, 'err'); }
+  }
+
+  /* ---------- register / edit facility ---------- */
+  function facModal(f) {
+    const t = f || {}; const vt = (t.vehicle_types || 'car,suv,bike').split(',');
+    const m = modal(`<h3>${f ? 'Edit facility' : 'Register facility'}</h3>
+      <div class="grid2"><div><label>Name</label><input id="fName" value="${esc(t.name)}"></div>
+      <div><label>Type</label><select id="fKind">${['garage', 'mall', 'open_ground', 'street', 'other'].map((k) => `<option value="${k}" ${t.kind === k ? 'selected' : ''}>${k.replace('_', ' ')}</option>`).join('')}</select></div></div>
+      <label>Address</label><div class="row gap"><input id="fAddr" value="${esc(t.address)}"><button class="btn ghost sm" type="button" id="fFind">Find on map</button></div>
+      <div id="fMap" class="minimap"></div><p class="note">Click the map to place the pin at the entrance. <span id="fPos"></span></p>
+      <label>Description</label><textarea id="fDesc">${esc(t.description)}</textarea>
+      <div class="grid2"><div><label>Opens</label><input type="time" id="fOpen" value="${esc(t.open_time || '06:00')}"></div><div><label>Closes</label><input type="time" id="fClose" value="${esc(t.close_time || '23:00')}"></div></div>
+      <label>Vehicles allowed</label><div>${['car', 'suv', 'bike'].map((v) => `<label class="chk"><input type="checkbox" class="fVt" value="${v}" ${vt.includes(v) ? 'checked' : ''}>${v}</label>`).join('')}</div>
+      <label>Ownership / authority to operate this site</label><textarea id="fAuth" placeholder="e.g. Owned by XYZ Pvt Ltd; lease / permission letter available">${esc(t.authority_note)}</textarea>
+      <label>UPI ID for parking payments (e.g. name@bank)</label><input id="fUpi" value="${esc(t.upi_id)}" placeholder="yourname@bank">
+      <div class="grid2"><div><label>Height limit (m, optional)</label><input id="fHeight" type="number" step="0.1" min="0.5" max="6" value="${t.height_limit_m ?? ''}"></div>
+        <div><label>Covered area</label><select id="fCov"><option value="">Not set</option><option value="all">All slots covered</option><option value="half">Half covered</option><option value="none">Open air</option></select></div></div>
+      <h3 class="mt">Tariff</h3>
+      <div class="grid2"><div><label>Hourly rate (₹)</label><input id="tRate" type="number" min="0" value="${t.hourly_rate ?? 30}"></div><div><label>Minimum charge (₹)</label><input id="tMin" type="number" min="0" value="${t.min_charge ?? 20}"></div>
+      <div><label>Grace period (min)</label><input id="tGrace" type="number" min="0" value="${t.grace_minutes ?? 10}"></div><div><label>Daily cap (₹, optional)</label><input id="tCap" type="number" min="0" value="${t.daily_cap ?? ''}"></div></div>
+      <h3 class="mt">Smart pricing</h3>
+      <label class="chip-cb" style="display:flex;margin-top:6px"><input type="checkbox" id="fDyn" ${t.dynamic_pricing ? 'checked' : ''}> Raise the price when it is busy and lower it when it is quiet (uses the rush forecast)</label>
+      <div class="grid2"><div><label>Highest increase (%)</label><input id="fSurge" type="number" min="0" max="100" value="${t.surge_max_pct ?? 25}"></div><div><label>Highest discount (%)</label><input id="fDisc" type="number" min="0" max="60" value="${t.discount_max_pct ?? 20}"></div></div>
+      <button class="btn block mt" id="fSave">${f ? 'Save changes' : 'Submit for verification'}</button>`, true);
+
+    m.querySelector('#fCov').value = t.covered_mode || '';
+    let pos = f ? { lat: t.lat, lng: t.lng } : null;
+    const mp = L.map(m.querySelector('#fMap')).setView(pos ? [pos.lat, pos.lng] : [28.6139, 77.2090], pos ? 16 : 12);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 }).addTo(mp);
+    let mk = pos ? L.marker([pos.lat, pos.lng]).addTo(mp) : null;
+    const setPos = (ll) => { pos = { lat: +ll.lat.toFixed(6), lng: +ll.lng.toFixed(6) }; if (mk) mk.setLatLng(ll); else mk = L.marker(ll).addTo(mp); m.querySelector('#fPos').textContent = `(${pos.lat}, ${pos.lng})`; };
+    if (pos) m.querySelector('#fPos').textContent = `(${pos.lat}, ${pos.lng})`;
+    mp.on('click', (e) => setPos(e.latlng));
+    setTimeout(() => mp.invalidateSize(), 150);
+
+    m.querySelector('#fFind').onclick = async () => {
+      try {
+        const r = await fetch('https://nominatim.openstreetmap.org/search?format=json&limit=1&q=' + encodeURIComponent(m.querySelector('#fAddr').value));
+        const d = await r.json(); if (!d.length) return toast('Address not found', 'err');
+        const ll = { lat: +d[0].lat, lng: +d[0].lon }; mp.setView([ll.lat, ll.lng], 17); setPos(ll);
+      } catch (e) { toast('Search failed', 'err'); }
+    };
+    m.querySelector('#fSave').onclick = async () => {
+      const v = (id) => m.querySelector(id).value;
+      const body = { name: v('#fName'), kind: v('#fKind'), address: v('#fAddr'), description: v('#fDesc'), open_time: v('#fOpen'), close_time: v('#fClose'),
+        vehicle_types: [...m.querySelectorAll('.fVt:checked')].map((c) => c.value).join(','), authority_note: v('#fAuth'), upi_id: v('#fUpi'),
+        lat: pos && pos.lat, lng: pos && pos.lng, hourly_rate: v('#tRate'), min_charge: v('#tMin'), grace_minutes: v('#tGrace'), daily_cap: v('#tCap'),
+        height_limit_m: v('#fHeight'), covered_mode: v('#fCov'), dynamic_pricing: m.querySelector('#fDyn').checked, surge_max_pct: v('#fSurge'), discount_max_pct: v('#fDisc') };
+      try {
+        const r = f ? await api('/operator/facilities/' + f.id, { method: 'PUT', body }) : await api('/operator/facilities', { method: 'POST', body });
+        m.close(); toast(f ? 'Saved' : 'Submitted for verification'); loadFacs(f ? f.id : r.id);
+      } catch (e) { toast(e.message, 'err'); }
+    };
+  }
+
+  /* ---------- layout ---------- */
+  const drawLayout = () => renderLayout($('layoutBox'), layoutData.facility, layoutData.slots, {
+    selected: selSlot,
+    onClick: (s) => { selSlot = s.id; showSlot(s); drawLayout(); },
+    onMove: async (id, x, y) => {
+      try { await api(`/operator/slots/${id}`, { method: 'PATCH', body: { x, y } }); toast('Slot moved'); } catch (e) { toast(e.message, 'err'); }
+      loadLayout();
+    },
+  });
+
+  async function loadLayout() {
+    try {
+      const d = await api(`/operator/facilities/${cur.id}/slots`); layoutData = d;
+      $('layoutStatus').innerHTML = badge(d.facility.layout_status);
+      if (!d.slots.length) { $('layoutBox').innerHTML = '<p class="muted" style="padding:20px">No layout yet. Fill in the generator above.</p>'; return showSlot(null); }
+      drawLayout();
+      showSlot(d.slots.find((s) => s.id === selSlot));
+    } catch (e) { toast(e.message, 'err'); }
+  }
+
+  function showSlot(s) {
+    if (!s) { $('slotPanel').innerHTML = '<h3>Slot details</h3><p class="muted mt">Select a slot on the layout.</p>'; return; }
+    const cb = (id, on, label) => `<label class="chip-cb ${on ? 'on' : ''}"><input type="checkbox" id="${id}" ${on ? 'checked' : ''}> ${label}</label>`;
+    $('slotPanel').innerHTML = `<h3>${esc(s.label)}</h3>
+      <div class="kv"><span>Type</span><b>${esc(s.vehicle_type)}</b><span>Size</span><b>${sizeText(s)}</b><span>Position</span><b>${s.x}, ${s.y}</b><span>State</span><b style="text-transform:capitalize">${s.state}${s.state === 'occupied' ? (s.occupancy_verified ? ' (verified)' : ' (unverified)') : ''}</b></div>
+      <label>Features</label><div class="chips2">${cb('sfEv', s.ev, '⚡ EV charging')}${cb('sfCov', s.covered, '☂ Covered')}${cb('sfAcc', s.accessible, '♿ Accessible')}</div>
+      <label>Height limit (m, empty = none)</label><input id="sfH" type="number" step="0.1" min="0.5" max="6" value="${s.max_height ?? ''}">
+      <button class="btn block mt" id="sfSave">Save features</button>
+      <button class="btn ${s.is_active ? 'ghost' : ''} block mt" id="tog">${s.is_active ? 'Block / remove this slot' : 'Restore this slot'}</button>`;
+    $('slotPanel').querySelectorAll('.chip-cb input').forEach((i) => (i.onchange = () => i.closest('.chip-cb').classList.toggle('on', i.checked)));
+    $('sfSave').onclick = async () => {
+      try { await api(`/operator/slots/${s.id}`, { method: 'PATCH', body: { ev: $('sfEv').checked ? 1 : 0, covered: $('sfCov').checked ? 1 : 0, accessible: $('sfAcc').checked ? 1 : 0, max_height: $('sfH').value } }); toast('Slot updated'); loadLayout(); }
+      catch (e) { toast(e.message, 'err'); }
+    };
+    $('tog').onclick = async () => {
+      try { await api(`/operator/slots/${s.id}`, { method: 'PATCH', body: { is_active: s.is_active ? 0 : 1 } }); loadLayout(); }
+      catch (e) { toast(e.message, 'err'); }
+    };
+  }
+
+  /* ---------- gates (entry / exit) ---------- */
+  const gatesFromInputs = () => ({ entry_side: $('gtEntrySide').value, entry_pos: +$('gtEntryPos').value / 100, exit_side: $('gtExitSide').value || null, exit_pos: $('gtExitSide').value ? +$('gtExitPos').value / 100 : null });
+  function fillGates() {
+    $('gtEntrySide').value = cur.entry_side || 'bottom'; $('gtEntryPos').value = Math.round((cur.entry_pos == null ? 0.5 : cur.entry_pos) * 100);
+    $('gtExitSide').value = cur.exit_side || ''; $('gtExitPos').value = Math.round((cur.exit_pos == null ? 0.5 : cur.exit_pos) * 100);
+  }
+  ['gtEntrySide', 'gtEntryPos', 'gtExitSide', 'gtExitPos'].forEach((i) => $(i).addEventListener('input', () => { if (layoutData) { Object.assign(layoutData.facility, gatesFromInputs()); if (layoutData.slots.length) drawLayout(); } }));
+  $('gtSave').onclick = async () => {
+    try { const r = await api(`/operator/facilities/${cur.id}/gates`, { method: 'PUT', body: gatesFromInputs() }); toast(r.note); facs = await api('/operator/facilities'); cur = facs.find((x) => x.id === cur.id); }
+    catch (e) { toast(e.message, 'err'); }
+  };
+
+  /* ---------- rush model + driver reports ---------- */
+  async function loadModelCard() {
+    const box = $('mlCard');
+    try {
+      const m = await api(`/facilities/${cur.id}/rush/model`);
+      box.innerHTML = m.has_model ? `<div class="row between wrap-sm"><div><h3>Rush forecast model</h3><p class="muted">${m.n_samples.toLocaleString('en-IN')} hourly samples (${m.n_real} from real bookings) · typical error ±${m.mae_pct} points · R² ${m.r2}</p><p class="note">${esc(m.note)}</p></div>
+          <div class="row gap wrap-sm"><a class="btn ghost" href="/rush.html?id=${cur.id}">Open rush calendar</a><button class="btn" id="mlTrain">Retrain now</button></div></div>`
+        : `<h3>Rush forecast model</h3><p class="muted">${esc(m.note)}</p><a class="btn ghost sm" href="/rush.html?id=${cur.id}">Open rush calendar</a>`;
+      const t = document.getElementById('mlTrain');
+      if (t) t.onclick = async () => { t.disabled = true; try { const r = await api(`/operator/facilities/${cur.id}/rush/train`, { method: 'POST' }); toast(`Retrained on ${r.n_samples} samples (${r.n_real} real)`); loadModelCard(); } catch (e) { toast(e.message, 'err'); t.disabled = false; } };
+    } catch (e) { box.innerHTML = ''; }
+  }
+  const DP_CAT = { overcharged: 'Overcharged', slot_taken: 'Slot taken by someone else', wrong_slot: 'Wrong slot / directions', facility_closed: 'Facility closed', refund_not_received: 'Refund not received', other: 'Other' };
+  async function loadDisputes() {
+    try {
+      const l = await api(`/disputes/facility/${cur.id}`);
+      $('dpList').innerHTML = l.length ? l.map((d) => `<div class="card bk"><div class="row between wrap-sm"><div><h3>${esc(DP_CAT[d.category] || d.category)}</h3><p class="muted">${esc(d.user_name)} · ${esc(d.ref)} · ${esc(d.reg_no)} · ${fmt(d.created_at)}</p></div><span class="badge ${d.status === 'open' ? 'b-warn' : d.status === 'refunded' ? 'b-ok' : 'b-err'}">${d.status}</span></div>
+        <p>${esc(d.description)}</p>${d.resolution_note ? `<div class="info-box"><b>Your reply:</b> ${esc(d.resolution_note)}${d.refund_amount ? ` · refunded ${inr(d.refund_amount)}` : ''}</div>` : `<div class="row gap mt"><button class="btn sm" data-a="refund" data-id="${d.id}">Refund…</button><button class="btn ghost sm" data-a="reject" data-id="${d.id}">Reject</button></div>`}</div>`).join('')
+        : '<div class="card"><p class="muted">No reports from drivers for this facility.</p></div>';
+    } catch (e) { toast(e.message, 'err'); }
+  }
+  $('dpList').addEventListener('click', async (e) => {
+    const btn = e.target.closest('button[data-a]'); if (!btn) return;
+    const body = { action: btn.dataset.a };
+    if (btn.dataset.a === 'refund') { const a = prompt('Refund amount in ₹ (leave empty to refund everything the driver paid):', ''); if (a === null) return; body.amount = a.trim() === '' ? 'full' : a; }
+    const note = prompt(btn.dataset.a === 'refund' ? 'Note for the driver:' : 'Reason for rejecting (the driver will see this):', ''); if (!note) return; body.note = note;
+    try { const r = await api(`/disputes/${btn.dataset.id}/resolve`, { method: 'POST', body });
+      toast(r.refund ? (r.refund.manual ? `Refunded ${inr(r.refund.refunded)} online. Refund ${inr(r.refund.manual)} yourself - it was paid in cash/UPI.` : `Refunded ${inr(r.refund.refunded)}`) : 'Report closed'); loadDisputes(); }
+    catch (err) { toast(err.message, 'err'); }
+  });
+
+  $('gen').onclick = async () => {
+    const obstacles = $('gO').value.split('\n').map((l) => l.split(',').map(Number)).filter((a) => a.length === 4 && a.every(isFinite)).map(([x, y, w, h]) => ({ x, y, w, h }));
+    if (layoutData && layoutData.slots.length && !confirm('This replaces the current layout. Continue?')) return;
+    try {
+      const r = await api(`/operator/facilities/${cur.id}/layout/generate`, { method: 'POST', body: { width: $('gW').value, length: $('gL').value, vehicle: $('gV').value, aisle: $('gA').value, maxSlots: $('gM').value, startNumber: $('gS').value, ev: $('gEv').value, accessible: $('gAcc').value, covered: $('gCov').value, height: $('gH').value, obstacles } });
+      toast(`Proposed ${r.count} slots. Review, adjust, then publish.`); selSlot = null;
+      facs = await api('/operator/facilities'); cur = facs.find((x) => x.id === cur.id); loadLayout(); loadOverview();
+    } catch (e) { toast(e.message, 'err'); }
+  };
+  $('pub').onclick = async () => {
+    try { const r = await api(`/operator/facilities/${cur.id}/layout/publish`, { method: 'POST' }); toast(r.note); facs = await api('/operator/facilities'); cur = facs.find((x) => x.id === cur.id); loadLayout(); loadOverview(); }
+    catch (e) { toast(e.message, 'err'); }
+  };
+
+  /* ---------- bookings ---------- */
+  async function loadBookings() {
+    try { bookings = await api(`/operator/facilities/${cur.id}/bookings`); } catch (e) { return toast(e.message, 'err'); }
+    drawBookings();
+  }
+  $('bFilter').onchange = drawBookings;
+  function drawBookings() {
+    const f = $('bFilter').value; const rows = bookings.filter((b) => !f || b.status === f);
+    $('bBody').innerHTML = rows.length ? rows.map((b) => `<tr>
+      <td><b>${esc(b.ref)}</b></td><td>${esc(b.user_name)}<br><span class="muted">${esc(b.user_phone || '')}</span></td><td>${esc(b.reg_no)}</td>
+      <td>${esc(b.slot_label)}${b.mismatch ? `<br><span class="badge b-warn">parked in ${esc(b.actual_slot_label)}</span>` : ''}</td>
+      <td>${fmt(b.start_time)}<br>→ ${fmt(b.end_time)}</td>
+      <td>${badge(b.status)}${b.status === 'checked_in' ? `<br><span class="muted">${b.occupancy_verified ? 'verified' : 'unverified'} · ${inr(b.fee_estimate)} so far</span>` : ''}${b.status === 'completed' ? `<br><span class="muted">${inr(b.fee)}</span>` : ''}${b.resolution_note ? `<br><span class="muted">Note: ${esc(b.resolution_note)}</span>` : ''}</td>
+      <td><div class="row gap wrap-sm">
+        ${b.status === 'confirmed' ? `<button class="btn sm" data-a="in" data-id="${b.id}">Check in</button><button class="btn ghost sm" data-a="cancel" data-id="${b.id}">Cancel</button>` : ''}
+        ${b.status === 'checked_in' ? `<button class="btn sm" data-a="out" data-id="${b.id}">Check out</button>` : ''}
+        ${b.status === 'awaiting_payment' ? `<button class="btn sm" data-a="pay" data-id="${b.id}">Collect payment (${inr(b.fee)})</button>` : ''}
+        ${b.status === 'checked_in' && !b.occupancy_verified ? `<button class="btn ghost sm" data-a="verify" data-id="${b.id}" title="Confirm the vehicle is on site">Verify</button>` : ''}
+        ${b.mismatch && !b.resolution_note ? `<button class="btn ghost sm" data-a="res" data-id="${b.id}">Resolve</button>` : ''}
+        ${b.status === 'completed' ? `<button class="btn ghost sm" data-a="rec" data-id="${b.id}">Receipt</button>` : ''}
+      </div></td></tr>`).join('') : '<tr><td colspan="7" class="muted">No bookings found.</td></tr>';
+  }
+  $('bBody').addEventListener('click', async (e) => {
+    const btn = e.target.closest('button[data-a]'); if (!btn) return;
+    const b = bookings.find((x) => x.id === +btn.dataset.id); const a = btn.dataset.a;
+    const refresh = () => { loadBookings(); loadOverview(); };
+    try {
+      if (a === 'in') await checkinDialog(b, `/operator/bookings/${b.id}/checkin`, false, refresh);
+      if (a === 'cancel' && confirm('Cancel this booking?')) { await api(`/operator/bookings/${b.id}/cancel`, { method: 'POST' }); refresh(); }
+      if (a === 'out' && confirm('Record check-out and calculate the fee?')) { const r = await api(`/operator/bookings/${b.id}/checkout`, { method: 'POST' }); refresh(); if (r.status === 'completed') receiptModal(r); else paymentModal(r.id, { operator: true, onDone: refresh }); }
+      if (a === 'pay') paymentModal(b.id, { operator: true, onDone: refresh });
+      if (a === 'rec') receiptModal(b);
+      if (a === 'res') { const note = prompt('Resolution note (e.g. "Driver moved to Slot 34")'); if (note) { await api(`/operator/bookings/${b.id}/resolve`, { method: 'POST', body: { note } }); refresh(); } }
+      if (a === 'verify' && confirm('Confirm you have seen this vehicle in its slot?')) { await api(`/operator/bookings/${b.id}/verify`, { method: 'POST' }); toast('Occupancy verified'); refresh(); }
+    } catch (err) { toast(err.message, 'err'); }
+  });
+
+  /* ---------- gate: scan the booking QR (or type the reference) ---------- */
+  async function handleRef(ref) {
+    try { gateDialog(await api('/operator/bookings/lookup/' + encodeURIComponent(ref))); }
+    catch (e) { toast(e.message, 'err'); }
+  }
+  function gateDialog(b) {
+    const next = { confirmed: ['Check in this vehicle', 'in'], checked_in: ['Check out & collect payment', 'out'], awaiting_payment: ['Collect payment', 'pay'], completed: ['View receipt', 'rec'] }[b.status];
+    const m = modal(`<h3>${esc(b.ref)} ${badge(b.status)}</h3>
+      <div class="kv"><span>Driver</span><b>${esc(b.user_name)}</b><span>Vehicle</span><b>${esc(b.reg_no)}</b><span>Facility</span><b>${esc(b.facility_name)}</b><span>Slot</span><b>${esc(b.slot_label)}</b><span>Time</span><b>${fmt(b.start_time)} → ${fmt(b.end_time)}</b></div>
+      ${next ? `<button class="btn block" id="gAct">${next[0]}</button>` : `<p class="muted">This booking is ${esc(b.status.replace('_', ' '))} - no action possible.</p>`}`);
+    if (!next) return;
+    m.querySelector('#gAct').onclick = async () => {
+      m.close();
+      const refresh = () => { loadBookings(); loadOverview(); };
+      try {
+        if (next[1] === 'in') await checkinDialog(b, `/operator/bookings/${b.id}/checkin`, false, refresh);
+        if (next[1] === 'out') {
+          const r = await api(`/operator/bookings/${b.id}/checkout`, { method: 'POST' }); refresh();
+          if (r.status === 'completed') receiptModal(r); else paymentModal(r.id, { operator: true, onDone: refresh });
+        }
+        if (next[1] === 'pay') paymentModal(b.id, { operator: true, onDone: refresh });
+        if (next[1] === 'rec') receiptModal(b);
+      } catch (e) { toast(e.message, 'err'); }
+    };
+  }
+  $('refGo').onclick = () => { const v = $('refIn').value.trim(); if (v) handleRef(v); };
+  $('refIn').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('refGo').click(); });
+  $('scanBtn').onclick = async () => {
+    if (!navigator.mediaDevices || !window.jsQR) return toast('Camera scanning is not available here. Type the reference instead.', 'err');
+    const m = modal('<h3>Scan booking QR</h3><video id="cam" playsinline muted style="width:100%;border-radius:12px;background:#000"></video><canvas id="cv" hidden></canvas><p class="note">Point the camera at the driver’s QR code.</p>');
+    let stream = null, stop = false;
+    const cleanup = () => { stop = true; if (stream) stream.getTracks().forEach((t) => t.stop()); };
+    m.addEventListener('mousedown', (e) => { if (e.target === m || e.target.classList.contains('x')) cleanup(); });
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+      const v = m.querySelector('#cam'), c = m.querySelector('#cv'), ctx = c.getContext('2d', { willReadFrequently: true });
+      v.srcObject = stream; await v.play();
+      const tick = () => {
+        if (stop) return;
+        if (v.videoWidth) {
+          c.width = v.videoWidth; c.height = v.videoHeight; ctx.drawImage(v, 0, 0);
+          const img = ctx.getImageData(0, 0, c.width, c.height), code = jsQR(img.data, c.width, c.height);
+          if (code && /^MRG-[A-F0-9]{8}$/.test(code.data)) { cleanup(); m.close(); handleRef(code.data); return; }
+        }
+        requestAnimationFrame(tick);
+      };
+      tick();
+    } catch (e) { cleanup(); m.close(); toast('Could not open the camera. Allow camera access, or type the reference.', 'err'); }
+  };
+</script>
+</body>
+</html>

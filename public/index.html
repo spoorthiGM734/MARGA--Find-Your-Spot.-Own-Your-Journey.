@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>MARGA – Find Your Spot. Own Your Journey.</title>
+  <link rel="stylesheet" href="/css/style.css">
+  <link rel="manifest" href="/manifest.json">
+  <meta name="theme-color" content="#1b1f2b">
+  <link rel="icon" href="/img/favicon.png">
+  <link rel="apple-touch-icon" href="/img/apple-touch-icon.png">
+</head>
+<body>
+<header id="nav"></header>
+
+<section class="hero">
+  <div class="wrap hero-in">
+    <div>
+      <h1>Find Your Spot.<br><em>Own Your Journey.</em></h1>
+      <p class="lead">MARGA is a smart parking platform. Search any place, compare verified facilities and their expected rush, pick an exact slot that fits your vehicle, pay online, and follow the drive guide straight to it.</p>
+      <form class="search-bar" id="heroSearch">
+        <input id="q" placeholder="Where are you going? e.g. Select Citywalk, Saket" required>
+        <button class="btn">Find parking</button>
+      </form>
+      <div class="chips">
+        <span class="chip"><b>●</b> Destination-centred search</span>
+        <span class="chip"><b>●</b> Slot-level booking</span>
+        <span class="chip"><b>●</b> QR booking pass</span>
+      </div>
+    </div>
+    <div class="hero-logo"><img src="/img/logo.png" alt="MARGA – Find Your Spot. Own Your Journey."></div>
+  </div>
+</section>
+
+<section class="block">
+  <div class="wrap">
+    <h2>Everything parking, in one place</h2>
+    <p class="sub">From discovery to receipt, Marga connects drivers and parking operators on a single, software-first platform.</p>
+    <div class="grid4">
+      <div class="card feat"><div class="ico">📍</div><h3>Destination search</h3><p>Search any place, or use your current location, and see parking nearby on a map.</p></div>
+      <div class="card feat"><div class="ico">🧠</div><h3>Explained recommendations</h3><p>Rankings by price, distance and availability, plus an expected-rush forecast – with the reasons shown.</p></div>
+      <div class="card feat"><div class="ico">🧩</div><h3>Digital slot layouts</h3><p>Operators turn any suitable ground into numbered virtual slots – Slot 31, 32, 33… – no sensors needed.</p></div>
+      <div class="card feat"><div class="ico">🎯</div><h3>Pick your exact slot</h3><p>See the layout, choose Slot 34, and get a booking reference with a QR code.</p></div>
+      <div class="card feat"><div class="ico">🔒</div><h3>No double-booking</h3><p>Transaction-safe reservations make sure two drivers never hold the same slot at the same time.</p></div>
+      <div class="card feat"><div class="ico">🚗</div><h3>Reserved ≠ occupied</h3><p>Marga tracks reservations and physical occupancy separately, and says so when something is unverified.</p></div>
+      <div class="card feat"><div class="ico">🧾</div><h3>Check-in, billing, receipts</h3><p>Hourly rates, grace periods, minimum charges and daily caps are applied automatically.</p></div>
+      <div class="card feat"><div class="ico">🏢</div><h3>Operator dashboard</h3><p>Register facilities, mark entry and exit gates, generate layouts, set tariffs, and manage bookings and sessions.</p></div>
+      <div class="card feat"><div class="ico">🚙</div><h3>Sized to your vehicle</h3><p>Tell us your car or bike model. We find its size automatically and only offer slots it fits, with EV, covered and accessible filters.</p></div>
+      <div class="card feat"><div class="ico">🧭</div><h3>Drive guide</h3><p>A mini map, a route line and voice prompts take you from the gate to your slot - and back out - in English, Hindi or Kannada.</p></div>
+      <div class="card feat"><div class="ico">📈</div><h3>Rush calendar &amp; fair pricing</h3><p>See busy days around festivals, sales and weekends, with prices that ease when it is quiet.</p></div>
+      <div class="card feat"><div class="ico">💳</div><h3>Pay online, refunds, reviews</h3><p>Pay by UPI or card, get refunds under clear cancellation rules, rate facilities and report problems.</p></div>
+    </div>
+  </div>
+</section>
+
+<section class="block" style="background:var(--bg2)">
+  <div class="wrap">
+    <h2>How it works</h2><p class="sub">Four steps from “where am I going?” to “I’m parked.”</p>
+    <div class="grid4">
+      <div class="step"><b class="n">1</b><h3>Search</h3><p class="muted">Type your destination and time window.</p></div>
+      <div class="step"><b class="n">2</b><h3>Compare</h3><p class="muted">Review ranked options with price, walk time and free spaces.</p></div>
+      <div class="step"><b class="n">3</b><h3>Reserve</h3><p class="muted">Select a slot on the layout and confirm with your vehicle number.</p></div>
+      <div class="step"><b class="n">4</b><h3>Park &amp; go</h3><p class="muted">Navigate, check in, and get a digital receipt on check-out.</p></div>
+    </div>
+  </div>
+</section>
+
+<section class="block">
+  <div class="wrap">
+    <div class="cta">
+      <h2 style="margin-bottom:10px">Own or manage a parking ground?</h2>
+      <p class="muted" style="max-width:600px;margin:0 auto 22px">Register your facility, allocate spaces to Marga, and let the layout generator organise them digitally – with no new hardware.</p>
+      <a class="btn" href="/auth.html?tab=register&role=operator">Register as an operator</a>
+    </div>
+  </div>
+</section>
+
+<footer><div class="wrap">© 2026 MARGA · Find Your Spot. Own Your Journey.</div></footer>
+
+<script src="/js/i18n.js"></script>
+<script src="/js/common.js"></script>
+<script>
+  renderNav();
+  $('heroSearch').onsubmit = (e) => { e.preventDefault(); location.href = '/search.html?q=' + encodeURIComponent($('q').value.trim()); };
+</script>
+</body>
+</html>

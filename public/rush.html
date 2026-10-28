@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>MARGA – Rush insights</title>
+  <link rel="stylesheet" href="/css/style.css">
+  <link rel="manifest" href="/manifest.json">
+  <meta name="theme-color" content="#1b1f2b">
+  <link rel="icon" href="/img/favicon.png">
+  <link rel="apple-touch-icon" href="/img/apple-touch-icon.png">
+</head>
+<body>
+<header id="nav"></header>
+<main class="wrap" style="padding-top:28px;padding-bottom:60px">
+  <div class="row between wrap-sm">
+    <div><h1>Rush insights</h1><p class="muted">Find out when a parking facility is likely to be busy - around weekends, festivals, sales and paydays.</p></div>
+    <div class="row gap wrap-sm"><select id="facSel" style="min-width:260px"></select><a class="btn" id="bookLink" href="/search.html">Book parking here</a></div>
+  </div>
+  <div id="srcNote" class="mt"></div>
+
+  <div class="rush-grid mt">
+    <div class="card">
+      <div class="row between"><button class="btn ghost sm" id="prevM">‹</button><h3 id="monthTitle"></h3><button class="btn ghost sm" id="nextM">›</button></div>
+      <div class="cal-head"><span>Sun</span><span>Mon</span><span>Tue</span><span>Wed</span><span>Thu</span><span>Fri</span><span>Sat</span></div>
+      <div class="cal" id="cal"></div>
+      <div class="legend"><span><i style="background:rgba(183,255,60,.6)"></i>Low</span><span><i style="background:rgba(92,200,255,.6)"></i>Moderate</span><span><i style="background:rgba(255,200,87,.7)"></i>High</span><span><i style="background:rgba(255,107,107,.8)"></i>Very high</span><span>🎉 festival / holiday / sale</span></div>
+      <p class="note">Each day shows its expected peak (% of parking spaces in use). Tap a day for the hour-by-hour graph.</p>
+    </div>
+    <div class="card" id="dayCard"><p class="muted">Loading…</p></div>
+  </div>
+
+  <div class="card mt"><h3>A typical week</h3><p class="note">Average expected use by weekday and hour (ordinary weeks, without festivals or sales).</p><div class="scroll-x"><table class="heat" id="heat"></table></div></div>
+
+  <div class="grid2 mt" style="align-items:start">
+    <div class="card" id="modelCard"><p class="muted">Loading…</p></div>
+    <div class="card"><h3>Coming up</h3><div id="events" class="mt muted">—</div></div>
+  </div>
+</main>
+
+<script src="/js/i18n.js"></script>
+<script src="/js/common.js"></script>
+<script>
+  renderNav();
+  const LV = (p) => (p < 30 ? ['Low', 'low'] : p < 55 ? ['Moderate', 'mod'] : p < 78 ? ['High', 'high'] : ['Very high', 'vh']);
+  const BADGE_C = { Low: 'b-ok', Moderate: 'b-info', High: 'b-warn', 'Very high': 'b-err' };
+  const hr = (h) => `${h % 12 || 12}${h < 12 ? 'a' : 'p'}`, hr2 = (h) => `${h % 12 || 12} ${h < 12 ? 'AM' : 'PM'}`;
+  const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+  let fid = new URLSearchParams(location.search).get('id'), month = null, selDate = null, cal = null, todayYmd = null;
+
+  (async () => {
+    const list = await api('/facilities/list/all').catch(() => []);
+    if (!list.length) { $('dayCard').innerHTML = '<p class="muted">No facilities available yet.</p>'; return; }
+    if (!fid || !list.find((f) => f.id === +fid)) fid = String(list[0].id);
+    $('facSel').innerHTML = list.map((f) => `<option value="${f.id}" ${f.id === +fid ? 'selected' : ''}>${esc(f.name)}${f.has_model ? ' ★' : ''}</option>`).join('');
+    $('facSel').onchange = () => { fid = $('facSel').value; history.replaceState(null, '', '?id=' + fid); loadAll(); };
+    $('prevM').onclick = () => shift(-1); $('nextM').onclick = () => shift(1);
+    loadAll();
+  })();
+
+  function shift(n) { const [y, m] = month.split('-').map(Number), d = new Date(Date.UTC(y, m - 1 + n, 1)); month = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`; selDate = null; loadCal(); }
+  async function loadAll() {
+    $('bookLink').href = `/facility.html?id=${fid}`; month = null; selDate = null;
+    await loadCal(); loadWeekly(); loadModel();
+  }
+  async function loadCal() {
+    try { cal = await api(`/facilities/${fid}/rush/calendar${month ? '?month=' + month : ''}`); } catch (e) { return toast(e.message, 'err'); }
+    month = cal.month; todayYmd = cal.today;
+    const [y, m] = month.split('-').map(Number), first = new Date(Date.UTC(y, m - 1, 1)).getUTCDay();
+    $('monthTitle').textContent = `${MONTHS[m - 1]} ${y}`;
+    $('cal').innerHTML = Array(first).fill('<div class="cd empty"></div>').join('') + cal.days.map((d) =>
+      `<button class="cd cd-${d.cls}${d.date === cal.today ? ' today' : ''}${d.past ? ' past' : ''}${d.date === selDate ? ' sel' : ''}" data-d="${d.date}" title="${esc(d.events.join(', ') || d.level + ' - peak ' + Math.round(d.peak * 100) + '%')}"><b>${+d.date.slice(8)}</b>${d.events.length ? '<span class="ev">🎉</span>' : ''}<span class="pk">${Math.round(d.peak * 100)}%</span></button>`).join('');
+    $('cal').onclick = (e) => { const b = e.target.closest('.cd[data-d]'); if (b) { selDate = b.dataset.d; $('cal').querySelectorAll('.cd').forEach((x) => x.classList.toggle('sel', x === b)); loadDay(); } };
+    $('srcNote').innerHTML = cal.source === 'model'
+      ? '<div class="info-box">🧠 This forecast comes from a model trained on hourly parking history and the festival / sale / holiday calendar. It is based on <b>sample data</b> for this demo.</div>'
+      : '<div class="info-box">This forecast uses typical patterns for this kind of place (no trained model yet). It improves once the facility has booking history.</div>';
+    const up = cal.upcoming; $('events').innerHTML = up.length ? up.map((e) => `<div class="row between" style="padding:6px 0;border-bottom:1px solid var(--line)"><span>${new Date(e.date + 'T00:00:00Z').toLocaleDateString('en-IN', { day: 'numeric', month: 'short', timeZone: 'UTC' })} · ${esc(e.name)}</span><span class="tag">${e.type}</span></div>`).join('') : 'No festivals or holidays in the next 45 days.';
+    if (!selDate) selDate = (cal.days.find((d) => d.date === cal.today) || cal.days.find((d) => d.events.length) || cal.days[0]).date;
+    $('cal').querySelectorAll('.cd').forEach((x) => x.classList.toggle('sel', x.dataset.d === selDate));
+    loadDay();
+  }
+
+  async function loadDay() {
+    let d; try { d = await api(`/facilities/${fid}/rush/day?date=${selDate}`); } catch (e) { return toast(e.message, 'err'); }
+    const [h0, h1] = d.open, W = 640, H = 250, L = 38, R = 8, T = 16, B = 30, n = h1 - h0, bw = (W - L - R) / n, ch = H - T - B, peak = Math.max(...d.hours.slice(h0, h1).map((h) => h.pct));
+    let svg = `<svg class="chart" viewBox="0 0 ${W} ${H}" width="100%" role="img" aria-label="Expected parking use by hour">`;
+    [[30, 'Moderate'], [55, 'High'], [78, 'Very high']].forEach(([p, t]) => { const y = T + ch * (1 - p / 100); svg += `<line class="thr" x1="${L}" x2="${W - R}" y1="${y}" y2="${y}"/><text x="${W - R}" y="${y - 3}" text-anchor="end">${t}</text>`; });
+    [0, 50, 100].forEach((p) => { svg += `<text x="${L - 6}" y="${T + ch * (1 - p / 100) + 4}" text-anchor="end">${p}%</text>`; });
+    for (let h = h0; h < h1; h++) {
+      const x = d.hours[h], bh = ch * x.pct / 100, bx = L + (h - h0) * bw + 2;
+      svg += `<rect class="f-${x.cls}" x="${bx}" y="${T + ch - bh}" width="${bw - 4}" height="${Math.max(2, bh)}" rx="3"><title>${hr2(h)}: ${x.pct}% - ${x.level}${d.dynamic ? ` · ₹${x.price}/hr` : ''}</title></rect>`;
+      if (x.pct === peak) svg += `<text x="${bx + (bw - 4) / 2}" y="${T + ch - bh - 4}" text-anchor="middle" style="fill:#fff;font-weight:700">${x.pct}%</text>`;
+      svg += `<text x="${bx + (bw - 4) / 2}" y="${H - 10}" text-anchor="middle">${n > 14 ? (h % 2 === 0 ? hr(h) : '') : hr(h)}</text>`;
+    }
+    svg += '</svg>';
+    const dt = new Date(d.date + 'T00:00:00Z').toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' });
+    const win = (w, label) => (w ? `<span class="badge ${BADGE_C[w.level]}">${label}</span> <b>${hr2(w.from)} – ${hr2(w.to)}</b> <span class="muted">(about ${w.pct}% full)</span>` : '');
+    $('dayCard').innerHTML = `<h3>${dt}</h3><div class="mt">${d.events.map((e) => `<span class="tag lime">🎉 ${esc(e)}</span>`).join('') || '<span class="muted">An ordinary day - no festival, holiday or sale.</span>'}</div>
+      <div class="mt">${svg}</div>
+      <div class="mt" style="line-height:2.1">${win(d.busiest, 'Busiest')}<br>${win(d.quietest, 'Quietest')}</div>
+      ${d.dynamic ? `<p class="mt"><b>Smart pricing is on:</b> <span class="muted">${inr(d.base_rate)}/hr normally. It rises when busy and drops when quiet.</span></p><div class="scroll-x"><div class="pricerow">${d.hours.slice(h0, h1).map((x) => `<span class="${x.multiplier > 1 ? 'up' : x.multiplier < 1 ? 'down' : ''}"><small>${hr(x.hour)}</small>${inr(x.price)}</span>`).join('')}</div></div>` : ''}
+      <p class="note">${d.source === 'model' ? 'Forecast from the trained model.' : 'Typical-pattern forecast.'} Actual use can differ - treat this as a guide, and book ahead on busy days.</p>`;
+  }
+
+  async function loadWeekly() {
+    try {
+      const w = await api(`/facilities/${fid}/rush/weekly`), [h0, h1] = w.open;
+      $('heat').innerHTML = `<tr><td></td>${Array.from({ length: h1 - h0 }, (_, i) => `<td style="background:none;color:var(--muted)">${hr(h0 + i)}</td>`).join('')}</tr>` +
+        w.days.map((d) => `<tr><td style="background:none;color:var(--muted);text-align:right;padding-right:6px">${d.name}</td>${d.pct.slice(h0, h1).map((p) => { const [l, c] = LV(p); const col = { low: '183,255,60', mod: '92,200,255', high: '255,200,87', vh: '255,107,107' }[c]; return `<td style="background:rgba(${col},${(0.25 + p / 140).toFixed(2)})" title="${d.name} ${p}% - ${l}">${p}</td>`; }).join('')}</tr>`).join('');
+    } catch (e) { $('heat').innerHTML = ''; }
+  }
+  async function loadModel() {
+    let m; try { m = await api(`/facilities/${fid}/rush/model`); } catch (e) { return; }
+    const canTrain = store.user && ['operator', 'admin'].includes(store.user.role);
+    $('modelCard').innerHTML = m.has_model ? `<h3>How the forecast works</h3>
+      <div class="kv"><span>Trained on</span><b>${m.n_samples.toLocaleString('en-IN')} hourly samples (${m.n_real} from real bookings)</b><span>Typical error</span><b>±${m.mae_pct} percentage points</b><span>Accuracy (R²)</span><b>${m.r2}</b><span>Calendar features</span><b>${m.features}</b><span>Last trained</span><b>${fmt(m.trained_at)}</b></div>
+      <p class="note">${esc(m.note)}. The model learns the hour of day, weekday, weekend patterns, public holidays, festivals, the day before a festival, sale seasons, paydays and long weekends. The accuracy was measured on the most recent days it had not been trained on. The demo history is sample data, so these numbers show the method works - not how a real facility will behave.</p>
+      ${canTrain ? '<button class="btn ghost sm" id="retrain">Retrain model now</button>' : ''}`
+      : `<h3>How the forecast works</h3><p class="muted">${esc(m.note)}</p>`;
+    const rt = document.getElementById('retrain');
+    if (rt) rt.onclick = async () => { rt.disabled = true; try { const r = await api(`/operator/facilities/${fid}/rush/train`, { method: 'POST' }); toast(`Retrained on ${r.n_samples} samples (${r.n_real} real)`); loadModel(); loadCal(); } catch (e) { toast(e.message, 'err'); rt.disabled = false; } };
+  }
+</script>
+</body>
+</html>
